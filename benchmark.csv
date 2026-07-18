@@ -1,0 +1,31 @@
+date,hardware,backend,candidate,validation,cold_ms,warm_ms,ram_mib,vram_mib,h2d_bytes,d2h_bytes,decision
+2026-07-18,RTX 4060 Ti 16GiB,CUDA 12.4,synthetic-prod-shape LSS atomic baseline,max_abs=2.38e-7,87.604,83.652,,75.13,0,0,baseline
+2026-07-18,RTX 4060 Ti 16GiB,CUDA 12.4,synthetic-prod-shape LSS cached geometry,max_abs=1.79e-7,85.668,86.601,,75.13,0,0,reject (3.5% warm regression)
+2026-07-18,RTX 4060 Ti 16GiB,CUDA 12.4/cuDNN 8 deterministic,real-weight BEV fusion/backbone/heatmap,max_abs=7.21e-6,20.056,19.612,,216.62,0,0,promote strict CUDA vertical slice (median of 5 processes)
+2026-07-18,RTX 4060 Ti 16GiB,CUDA 12.4/cuBLAS,TransFusion one-query-per-block flash attention,max_abs=1.00e-5,24.054,22.467,,73.91,0,0,retain fallback (median of 5 processes)
+2026-07-18,RTX 4060 Ti 16GiB,CUDA 12.4/cuBLAS,TransFusion one-exp branched online softmax,max_abs=1.00e-5,32.142,31.770,,73.91,0,0,reject (50.1% warm regression)
+2026-07-18,RTX 4060 Ti 16GiB,CUDA 12.4/cuBLAS,TransFusion 8-query warp tile flash attention,max_abs=1.00e-5,16.110,17.164,,73.91,0,0,promote (23.6% warm win; median of 5 processes)
+2026-07-18,RTX 4060 Ti 16GiB,CUDA 12.4/cuBLAS,TransFusion 16-query warp tile flash attention,max_abs=1.00e-5,21.004,21.963,,73.91,0,0,reject (28.0% warm regression)
+2026-07-18,RTX 4060 Ti 16GiB,CUDA 12.4/cuBLAS,TransFusion 8-query tile fast __expf,max_abs=5.48e-6,15.096,15.974,,73.91,0,0,retain labeled approximate route (6.1% warm win; median of 5)
+2026-07-18,RTX 4060 Ti 16GiB,CUDA 12.4/cuDNN/cuBLAS,BEV stage through canonical detections,max_abs=8.58e-6,36.490,36.181,,290.54,0,8804,promote device-resident CUDA tail (median of 5 processes)
+2026-07-18,RTX 4060 Ti 16GiB,CUDA 12.4,LSS precomputed ranks with atomic pooling,max_abs<=4.77e-7,92.860,92.977,,82.74,0,0,reject (8.6% warm regression; median of 5 processes)
+2026-07-18,RTX 4060 Ti 16GiB,CUDA 12.4,LSS stable intervals atomics-free NCHW,max_abs=1.79e-7,5.208,5.549,,54.47,0,0,retain strict fallback (kernel median of 5 processes)
+2026-07-18,RTX 4060 Ti 16GiB,CUDA 12.4,LSS direct calibration stable intervals NHWC,max_abs=1.79e-7,1.629,1.752,,115.75,0,0,promote strict default (includes 0.363ms per-frame preparation; median of 5 processes)
+2026-07-18,RTX 4060 Ti 16GiB,CUDA 12.4/cuDNN 8 deterministic,camera FPN+DepthLSS unconstrained workspace,max_abs=2.98e-6,10.704,9.467,,322.88,0,0,reject (slower and 226.18 MiB larger)
+2026-07-18,RTX 4060 Ti 16GiB,CUDA 12.4/cuDNN 8 deterministic,camera FPN+DepthLSS 16MiB workspace cap,max_abs=2.98e-6,5.475,5.827,,96.70,0,0,promote strict default (median of 5 processes)
+2026-07-18,RTX 4060 Ti 16GiB,CUDA 12.4/cuDNN 8 deterministic,post-LSS downsample 16MiB workspace cap,max_abs=1.01e-6,2.245,2.397,,96.70,0,0,promote shared camera context (median of 5 processes)
+2026-07-18,RTX 4060 Ti 16GiB,CUDA 12.4/cuDNN 8,camera neck through image BEV,max_abs=2.98e-6,9.682,9.600,,244.31,0,0,promote device-resident camera tail (median of 5 processes)
+2026-07-18,RTX 4060 Ti 16GiB,CUDA 12.4/cuBLAS pedantic,Swin one-query attention baseline,max_abs=2.86e-6,116.151,87.749,,393.73,0,0,baseline strict CUDA Swin
+2026-07-18,RTX 4060 Ti 16GiB,CUDA 12.4/cuBLAS pedantic,Swin 8-query attention tile,max_abs=2.86e-6,99.373,71.336,,393.73,0,0,promote intermediate (18.7% warm win)
+2026-07-18,RTX 4060 Ti 16GiB,CUDA 12.4/cuBLAS pedantic,Swin 16-query attention tile,max_abs=2.86e-6,103.383,75.229,,393.73,0,0,reject (5.5% regression versus tile8)
+2026-07-18,RTX 4060 Ti 16GiB,CUDA 12.4/cuBLAS pedantic,Swin shared-KV attention,max_abs=2.86e-6,92.977,63.652,,393.73,0,0,promote intermediate (10.8% over tile8)
+2026-07-18,RTX 4060 Ti 16GiB,CUDA 12.4/cuBLAS pedantic,Swin shared-KV bounded FFN/windows,max_abs=2.86e-6,78.261,58.055,,216.27,0,0,promote strict default (33.8% baseline speedup; 45.1% residency reduction; median of 5)
+2026-07-18,RTX 4060 Ti 16GiB,CUDA 12.4/cuBLAS TF32,Swin tensor-core approximate,max_abs=1.87e-3,,,,,0,0,reject strict oracle gate
+2026-07-18,RTX 4060 Ti 16GiB,CUDA 12.4/cuDNN/cuBLAS,camera images through image BEV,max_abs=8.11e-6,67.800,67.007,,472.95,0,0,promote complete device-resident camera branch (median of 5; bit-repeat exact)
+2026-07-18,RTX 4060 Ti 16GiB,CUDA 12.4,LiDAR direct hash convolution,max_abs=5.72e-6,89.944,89.944,,261.53,0,0,baseline strict sparse CUDA route
+2026-07-18,RTX 4060 Ti 16GiB,CUDA 12.4,LiDAR shared-neighbor per-row,max_abs=5.72e-6,,100.587,,261.53,0,0,reject warm regression
+2026-07-18,RTX 4060 Ti 16GiB,CUDA 12.4,LiDAR persistent rulebook 8192-grid adaptive blocks,max_abs=5.72e-6,,65.009,,278.01,0,0,promote sparse backbone
+2026-07-18,RTX 4060 Ti 16GiB,CUDA 12.4,stable voxel MeanVFE through LiDAR BEV,max_abs=5.72e-6; real voxel max_abs=1.53e-5; bit-repeat exact,58.687,58.936,,323.57,0,0,promote complete device-resident LiDAR branch (284.53 MiB contexts + 39.04 MiB boundary; median of 5)
+2026-07-18,RTX 4060 Ti 16GiB,CUDA 12.4/cuDNN/cuBLAS,complete BFI-to-detections serial runtime,200/200 matched; center_max=1.823e-3m; score_max=9.674e-5,191.217,142.381,,1118.71,18426080,8804,promote full strict CUDA runtime (median of 5 real-frame processes)
+2026-07-18,RTX 4060 Ti 16GiB,CUDA 12.4/cuDNN/cuBLAS,complete BFI-to-detections parallel branches,same strict output,188.806,145.783,,1118.71,18426080,8804,reject (2.4% warm regression)
+2026-07-18,CPU scalar,C11 strict,complete BFI-to-detections reference,oracle reference,209320.586,209320.586,342.02,,0,0,reference only

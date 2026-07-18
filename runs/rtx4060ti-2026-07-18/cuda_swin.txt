@@ -1,0 +1,18 @@
+RTX 4060 Ti 16 GiB, CUDA 12.4, cuBLAS/cuDNN 8, 2026-07-18
+
+Oracle maximum absolute errors:
+  output0: 2.62e-6
+  output1: 2.86e-6
+  output2: 2.86e-6
+  forced multi-window chunk boundary: <= 2.86e-6
+
+Candidate warm time / residency:
+  one-query attention: 87.749 ms / 393.73 MiB
+  query tile 8: 71.336 ms / 393.73 MiB
+  query tile 16: 75.229 ms / 393.73 MiB (reject)
+  shared K/V: 63.652 ms / 393.73 MiB
+  shared K/V, dead-QKV reuse, FFN4096, windows256: 58.055 ms / 216.27 MiB
+  TF32 error: 1.87e-3 (reject strict route)
+
+Final five-process median cold/warm: 78.261 / 58.055 ms.
+Boundary tensors: 34.03 MiB. H2D/D2H inside API: 0/0.

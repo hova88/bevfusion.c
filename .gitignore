@@ -1,0 +1,7 @@
+build/
+*.bfw
+*.bfi
+*.pth
+*.nsys-rep
+*.sqlite
+__pycache__/

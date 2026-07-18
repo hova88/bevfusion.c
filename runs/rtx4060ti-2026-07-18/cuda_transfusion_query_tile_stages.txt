@@ -1,0 +1,22 @@
+cuda_transfusion stages select=0.398 self=51.224 keys=7.255 cross=0.017 ffn=0.071 heads=3.317 ms
+cuda_transfusion stages select=0.191 self=0.180 keys=0.812 cross=14.466 ffn=0.067 heads=0.303 ms
+cuda_transfusion stages select=0.118 self=0.173 keys=0.851 cross=14.473 ffn=0.062 heads=0.354 ms
+cuda_transfusion stages select=0.314 self=0.170 keys=0.863 cross=15.470 ffn=0.066 heads=0.326 ms
+cuda_transfusion stages select=0.118 self=0.152 keys=1.385 cross=14.820 ffn=0.052 heads=0.355 ms
+cuda_transfusion stages select=0.102 self=0.157 keys=0.847 cross=14.471 ffn=0.068 heads=0.282 ms
+cuda_transfusion stages select=0.222 self=0.210 keys=1.413 cross=14.868 ffn=0.069 heads=0.347 ms
+cuda_transfusion stages select=0.155 self=0.190 keys=0.842 cross=14.465 ffn=0.059 heads=0.308 ms
+cuda_transfusion stages select=0.326 self=0.210 keys=0.869 cross=15.573 ffn=0.074 heads=0.333 ms
+cuda_transfusion stages select=0.216 self=0.172 keys=0.805 cross=14.465 ffn=0.146 heads=0.533 ms
+cuda_transfusion stages select=0.209 self=0.220 keys=0.844 cross=15.628 ffn=0.075 heads=0.334 ms
+cuda_transfusion stages select=0.206 self=0.175 keys=0.807 cross=15.904 ffn=0.046 heads=0.313 ms
+transfusion_decoder.center   max_abs=1e-05 mean_abs=1.94e-06
+transfusion_decoder.height   max_abs=7.45e-07 mean_abs=1.92e-07
+transfusion_decoder.dim      max_abs=9.54e-07 mean_abs=2.14e-07
+transfusion_decoder.rot      max_abs=9.28e-07 mean_abs=2.34e-07
+transfusion_decoder.vel      max_abs=1.28e-06 mean_abs=9.08e-08
+transfusion_decoder.heatmap  max_abs=5.72e-06 mean_abs=1.1e-06
+transfusion_decoder.query_scores max_abs=5.96e-08 mean_abs=8.38e-10
+transfusion_decoder.boxes    max_abs=4.77e-06 mean_abs=5.7e-07
+transfusion_decoder.scores   max_abs=3.73e-08 mean_abs=9.9e-09
+cuda_transfusion production create=4.671 ms cold=16.066 ms warm=16.854 ms resident=73.91 MiB

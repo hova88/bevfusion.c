@@ -1,0 +1,19 @@
+RTX 4060 Ti 16 GiB, CUDA 12.4, cuDNN 8, 2026-07-18
+Command: five independent test_cuda_camera processes
+
+Oracle maximum absolute errors:
+  FPN level 1: 2.98e-6
+  FPN level 0: 2.91e-6
+  depth logits: 2.15e-6
+  context: 1.19e-6
+  LSS downsample: 1.01e-6
+
+Median production timings (ms), deterministic 16 MiB workspace cap:
+  FPN + DepthLSS cold/warm: 5.475 / 5.827
+  post-LSS downsample cold/warm: 2.245 / 2.397
+  camera features -> LSS -> image BEV cold/warm: 9.682 / 9.600
+
+Camera context: 96.70 MiB.
+Camera + LSS contexts: 156.33 MiB.
+Contexts plus explicit boundary tensors: 244.31 MiB.
+Transfers inside chained slice: H2D 0, D2H 0.

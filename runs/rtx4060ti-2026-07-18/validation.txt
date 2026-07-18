@@ -1,0 +1,37 @@
+Validation audit, 2026-07-18
+
+PASS  make test
+  CPU containers, malformed headers/frames, scalar kernels, every real-weight
+  stage oracle, complete runtime binding, TUI composition, BFI CRC/layout.
+
+PASS  make portable-test
+  Rebuilt without -march=native using -O2 strict C11.
+
+PASS  ASan + UBSan full CPU test target
+  -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer
+  ASAN_OPTIONS=detect_leaks=1:halt_on_error=1
+  UBSAN_OPTIONS=halt_on_error=1
+
+PASS  make cuda-test
+  Depth raster, LSS, BEV, TransFusion, composed tail, camera neck, batch-two
+  composed camera oracle, Swin, compact/real voxel, LiDAR, and complete real
+  BFI runtime. Every CUDA source also compiles with host -Wall -Wextra.
+
+PASS  real full-graph differential
+  Scalar CPU vs CUDA on sample ca9a282c9e77460f8360f564131a8af5.
+  200/200 class-aware nearest-center matches within recorded strict gates.
+  Two additional mini frames (273651 and 273887 points) complete successfully.
+
+PASS  malformed CUDA runtime gates
+  Oversized point count and singular lidar augmentation are rejected.
+
+UNAVAILABLE  NVIDIA Compute Sanitizer 2024.1.1
+  The installed tool reports "Failed to initialize WDDM debugger interface"
+  and "Device not supported" before instrumentation. This is not recorded as a
+  sanitizer pass. Default paths still use launch checks, stage oracles, exact
+  repeat gates, capacity clamping, and the 272414-point CPU/GPU voxel audit.
+
+NOT CLAIMED  official nuScenes mAP/NDS
+  The local evidence contains three licensed mini frames and BFI intentionally
+  omits lidar-to-global/sample-result metadata. Stage and full-output numerical
+  validation are claimed; an official dataset metric is not fabricated.

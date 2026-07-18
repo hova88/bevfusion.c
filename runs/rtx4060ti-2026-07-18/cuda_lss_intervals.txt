@@ -1,0 +1,19 @@
+RTX 4060 Ti 16 GiB, CUDA 12.4, 2026-07-18
+Command: for run in 1 2 3 4 5; do ./build/test_cuda_lss build/kernel_oracle.bfw; done
+
+Correctness:
+  ranked atomic max_abs: <= 4.77e-7
+  stable interval max_abs: 1.79e-7
+  direct calibration + NHWC max_abs: 1.79e-7
+
+Median production timings (ms):
+  atomic baseline cold/warm: 86.011 / 85.577
+  precomputed-rank atomic cold/warm: 92.860 / 92.977
+  interval NCHW cold/warm: 5.208 / 5.549
+  interval NHWC cold/warm: 1.266 / 1.389
+  direct calibration preparation: 0.363
+
+Promoted total with per-frame preparation: 1.752 ms warm.
+Plan resident bytes: 59.63 MiB.
+Direct production boundary plus plan: 115.75 MiB.
+Transfers inside API: H2D 0, D2H 0.

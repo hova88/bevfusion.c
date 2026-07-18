@@ -1,0 +1,14 @@
+RTX 4060 Ti 16 GiB, CUDA 12.4, 2026-07-18
+
+Composed oracle:
+  Swin -> FPN -> DepthLSS logits max_abs: 8.11e-6
+  Swin -> FPN -> DepthLSS context max_abs: 2.38e-6
+
+Five-process production median:
+  cold: 67.800 ms
+  warm: 67.007 ms
+  contexts: 372.59 MiB
+  explicit boundary tensors: 100.36 MiB
+  total recorded VRAM: 472.95 MiB
+  repeated image-BEV output: bit-exact
+  inference H2D/D2H: 0/0

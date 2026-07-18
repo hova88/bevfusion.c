@@ -1,0 +1,35 @@
+RTX 4060 Ti 16 GiB, CUDA 12.4, cuDNN 8, cuBLAS, 2026-07-18
+nuScenes mini sample ca9a282c9e77460f8360f564131a8af5
+
+Input boundary
+  six normalized 3x256x704 cameras + 272414 five-field points + calibration
+  H2D bytes per frame: 18426080
+  graph-intermediate transfer bytes: 0
+  final D2H bytes: 8804 (canonical bf_detections only)
+
+Complete graph
+  depth raster -> voxel/MeanVFE -> 21-layer sparse LiDAR backbone
+  Swin-T -> FPN/DepthLSS -> direct-calibration LSS -> image downsample
+  image/LiDAR concat -> BEV stage -> TransFusion -> decode/filter
+  owned total residency: 1118.71 MiB
+  output repeat: bit exact
+
+Five independent processes, promoted serial branch schedule
+  cold_wall_ms: 215.777 191.217 216.453 187.391 188.654
+  warm_wall_ms: 141.716 142.454 142.381 142.560 141.881
+  medians: cold=191.217 warm=142.381 ms
+
+Parallel camera/LiDAR streams control
+  cold_wall_ms: 183.807 188.806 213.500 190.799 187.603
+  warm_wall_ms: 135.521 147.089 144.967 146.543 145.783
+  medians: cold=188.806 warm=145.783 ms
+  decision: reject default (2.4% median warm regression from resource contention)
+  reproduce with BF_CUDA_RUNTIME_PARALLEL=1
+
+Scalar CPU reference on the same BFI: 209320.586 ms.
+Greedy class/nearest-center matching covers all 200 detections:
+  center_max=0.001823 m, yaw_max=0.0110136 rad
+  score_max=9.6739e-5
+  width/length/height max=0.00106239/0.00057674/0.00044918 m
+  velocity_x/y max=0.000215411/0.000301987 m/s
+The raw ranked order differs at near-tied scores; the matched class multiset is exact.
