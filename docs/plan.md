@@ -12,8 +12,9 @@
    the measured winner, custom sparse/LSS/top-k/decode kernels, narrow C ABI.
 6. **KDA kernel loop** — profile hot kernels, maintain candidates and fallback
    switches, validate numerically after each promoted change.
-7. **Canonical decode and BEV TUI** — asynchronous frame inference, metric BEV
-   boxes/velocity/rings/trails/inspection, robust terminal restoration; no
-   point-cloud render mode.
+7. **Canonical decode and BEV TUI** — retain validated BFI mappings for the
+   viewer lifetime; render density/height-aware LiDAR occupancy under
+   confidence-filled metric boxes, velocity, rings, trails, and inspection;
+   preserve robust terminal restoration and a deterministic compose fixture.
 8. **Completion gates** — sanitizers, malformed inputs, CPU/CUDA oracles, real
    samples, official evaluation, cold/warm benchmarks, and peak memory reports.

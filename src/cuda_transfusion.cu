@@ -312,7 +312,8 @@ extern "C" int bf_cuda_transfusion_forward(bf_cuda_transfusion *d,const float *s
     cudaStream_t stream=reinterpret_cast<cudaStream_t>(stream_value);work_views v=views(d);size_t p=d->proposals,k=d->keys;
     stage_profiler profiler(stream);
     suppress_kernel<<<(d->candidates+255)/256,256,0,stream>>>(heatmap,v.suppressed,(int)d->height,(int)d->width);
-    cudaMemcpyAsync(v.sort_a,v.suppressed,d->candidates*sizeof(float),cudaMemcpyDeviceToDevice,stream);
+    if(!cuda_ok(cudaMemcpyAsync(v.sort_a,v.suppressed,d->candidates*sizeof(float),
+        cudaMemcpyDeviceToDevice,stream),error,cap,"copy suppressed proposal scores"))return 0;
     iota_kernel<<<(d->candidates+255)/256,256,0,stream>>>(v.index_a,d->candidates);
     if(cub::DeviceRadixSort::SortPairsDescending(d->cub_workspace,d->cub_bytes,v.sort_a,v.sort_b,v.index_a,v.index_b,d->candidates,0,32,stream)!=cudaSuccess)
         return fail(error,cap,"CUB proposal sort failed");

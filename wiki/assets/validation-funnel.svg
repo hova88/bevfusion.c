@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="340" viewBox="0 0 960 340" role="img" aria-labelledby="title desc">
+  <title id="title">Correctness validation funnel</title><desc id="desc">Validation narrows from file contracts to a complete real-frame differential.</desc>
+  <rect width="960" height="340" rx="24" fill="#0b1020"/>
+  <g font-family="DejaVu Sans, sans-serif" text-anchor="middle" font-size="16"><path d="M90 48h780l-78 48H168z" fill="#172554" stroke="#38bdf8"/><text x="480" y="78" fill="#dbeafe">BFW / BFI malformed-input gates</text><path d="M168 108h624l-74 48H242z" fill="#25164a" stroke="#a78bfa"/><text x="480" y="138" fill="#dbeafe">scalar operator fixtures</text><path d="M242 168h476l-70 48H312z" fill="#3b1736" stroke="#f472b6"/><text x="480" y="198" fill="#dbeafe">real-weight module oracles</text><path d="M312 228h336l-64 48H376z" fill="#3b2d12" stroke="#facc15"/><text x="480" y="258" fill="#dbeafe">composed branch gates</text><path d="M376 288h208l-50 36H426z" fill="#12372d" stroke="#34d399"/><text x="480" y="313" fill="#dbeafe" font-size="14">real BFI differential</text></g>
+</svg>

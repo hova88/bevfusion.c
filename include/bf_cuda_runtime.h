@@ -35,6 +35,11 @@ int bf_cuda_runtime_debug_bev_stats(const bf_cuda_runtime *runtime,
                                     float stats4_host[4],
                                     char *error, size_t error_cap);
 
+/* Out-of-band bitwise hashes for eleven major device graph boundaries. */
+int bf_cuda_runtime_debug_hashes(const bf_cuda_runtime *runtime,
+                                 unsigned long long hashes11_host[11],
+                                 char *error, size_t error_cap);
+
 #ifdef __cplusplus
 }
 #endif

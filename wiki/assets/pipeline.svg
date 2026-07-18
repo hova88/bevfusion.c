@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="340" viewBox="0 0 960 340" role="img" aria-labelledby="title desc">
+  <title id="title">BEVFusion execution pipeline</title><desc id="desc">Camera and LiDAR branches join at BEV fusion and produce canonical detections.</desc>
+  <rect width="960" height="340" rx="24" fill="#0b1020"/>
+  <g font-family="DejaVu Sans, sans-serif" font-size="16" fill="#dbeafe" text-anchor="middle">
+    <g stroke="#38bdf8" stroke-width="2" fill="#111a2e"><rect x="34" y="54" width="130" height="54" rx="12"/><rect x="210" y="54" width="130" height="54" rx="12"/><rect x="386" y="54" width="130" height="54" rx="12"/></g>
+    <text x="99" y="87">6 cameras</text><text x="275" y="78">Swin +</text><text x="275" y="98">depth neck</text><text x="451" y="78">interval LSS</text><text x="451" y="98">80 × 180²</text>
+    <g stroke="#f472b6" stroke-width="2" fill="#111a2e"><rect x="34" y="230" width="130" height="54" rx="12"/><rect x="210" y="230" width="130" height="54" rx="12"/><rect x="386" y="230" width="130" height="54" rx="12"/></g>
+    <text x="99" y="263">LiDAR points</text><text x="275" y="254">stable voxels</text><text x="275" y="274">+ MeanVFE</text><text x="451" y="254">sparse CNN</text><text x="451" y="274">256 × 180²</text>
+    <g stroke="#facc15" stroke-width="2" fill="#111a2e"><rect x="594" y="142" width="130" height="56" rx="12"/><rect x="790" y="142" width="136" height="56" rx="12"/></g>
+    <text x="659" y="165">BEV fusion</text><text x="659" y="185">336 × 180²</text><text x="858" y="165">TransFusion</text><text x="858" y="185">≤ 200 boxes</text>
+  </g>
+  <g fill="none" stroke="#64748b" stroke-width="3" marker-end="url(#a)"><path d="M164 81h46"/><path d="M340 81h46"/><path d="M164 257h46"/><path d="M340 257h46"/><path d="M516 81c55 0 35 89 78 89"/><path d="M516 257c55 0 35-87 78-87"/><path d="M724 170h66"/></g>
+  <defs><marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0l10 5-10 5z" fill="#64748b"/></marker></defs>
+</svg>
