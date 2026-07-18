@@ -28,4 +28,6 @@ date,hardware,backend,candidate,validation,cold_ms,warm_ms,ram_mib,vram_mib,h2d_
 2026-07-18,RTX 4060 Ti 16GiB,CUDA 12.4,stable voxel MeanVFE through LiDAR BEV,max_abs=5.72e-6; real voxel max_abs=1.53e-5; bit-repeat exact,58.687,58.936,,323.57,0,0,promote complete device-resident LiDAR branch (284.53 MiB contexts + 39.04 MiB boundary; median of 5)
 2026-07-18,RTX 4060 Ti 16GiB,CUDA 12.4/cuDNN/cuBLAS,complete BFI-to-detections serial runtime,200/200 matched; center_max=1.823e-3m; score_max=9.674e-5,191.217,142.381,,1118.71,18426080,8804,promote full strict CUDA runtime (median of 5 real-frame processes)
 2026-07-18,RTX 4060 Ti 16GiB,CUDA 12.4/cuDNN/cuBLAS,complete BFI-to-detections parallel branches,same strict output,188.806,145.783,,1118.71,18426080,8804,reject (2.4% warm regression)
+2026-07-18,RTX 4060 Ti 16GiB,CUDA 12.4,LSS calibration-plan reuse,unchanged 210-float calibration key,,145.852,,1118.71,18426080,8804,promote stage optimization (avoids ~0.36ms plan preparation; full-graph median of 7 is noise-bound)
+2026-07-18,RTX 4060 Ti 16GiB,CUDA 12.4,LSS 64-bit cell+ordinal ordering,same module oracle,,,,82.71,0,0,reject (plan rebuild ~1.17ms and +23.08MiB versus 32-bit stable sort)
 2026-07-18,CPU scalar,C11 strict,complete BFI-to-detections reference,oracle reference,209320.586,209320.586,342.02,,0,0,reference only

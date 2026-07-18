@@ -8,6 +8,7 @@
 #endif
 
 #include <errno.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,14 +22,22 @@ static void usage(const char *program) {
                     "  %s infer MODEL.bfw FRAME.bfi\n"
                     "  %s tui MODEL.bfw FRAME.bfi [FRAME.bfi ...]\n"
                     "  %s infer-cuda MODEL.bfw FRAME.bfi\n"
-                    "  %s tui-cuda MODEL.bfw FRAME.bfi [FRAME.bfi ...]\n",
-            program, program, program, program, program, program, program);
+                    "  %s tui-cuda MODEL.bfw FRAME.bfi [FRAME.bfi ...]\n"
+                    "  %s render-cuda MODEL.bfw INDEX TOTAL COLUMNS ROWS FRAME.bfi [FRAME.bfi ...]\n",
+            program, program, program, program, program, program, program,
+            program);
 }
 
 static double milliseconds(void) {
     struct timespec value;
     clock_gettime(CLOCK_MONOTONIC, &value);
     return value.tv_sec * 1000.0 + value.tv_nsec / 1000000.0;
+}
+
+static void close_frame_sequence(bf_frame_file **files, int count) {
+    if (!files) return;
+    for (int i = 0; i < count; ++i) bf_frame_close(files[i]);
+    free(files);
 }
 
 static int run_frame(const bf_runtime *runtime, const bf_frame_file *file,
@@ -109,20 +118,20 @@ static int tui_cuda_command(const char *model_path, int frame_count, char **path
     char error[256] = {0}; bf_cuda_runtime *runtime = NULL;
     bf_detections *all = calloc((size_t)frame_count, sizeof(*all));
     double *timings = calloc((size_t)frame_count, sizeof(*timings));
-    if (!all || !timings || !bf_cuda_runtime_create(model_path, 300000, 160000,
+    bf_frame_file **files = calloc((size_t)frame_count, sizeof(*files));
+    if (!all || !timings || !files || !bf_cuda_runtime_create(model_path, 300000, 160000,
             160000, &runtime, error, sizeof(error))) goto failure;
     for (int i = 0; i < frame_count; ++i) {
-        bf_frame_file *file = NULL;
-        if (!bf_frame_open(paths[i], &file, error, sizeof(error)) ||
-            !run_cuda_frame(runtime, file, &all[i], &timings[i], error, sizeof(error))) {
-            bf_frame_close(file); goto failure;
-        }
-        bf_frame_close(file);
+        if (!bf_frame_open(paths[i], &files[i], error, sizeof(error)) ||
+            !run_cuda_frame(runtime, files[i], &all[i], &timings[i], error, sizeof(error)))
+            goto failure;
     }
     bf_tui_state state;
     if (!bf_tui_begin(&state)) { snprintf(error, sizeof(error), "TUI requires an interactive terminal"); goto failure; }
     size_t current = 0; bf_tui_update_tracks(&state, &all[current], current);
-    bf_tui_render(&all[current], current, (size_t)frame_count, timings[current], "cuda-strict", &state);
+    const bf_frame_input *input = bf_frame_input_view(files[current]);
+    bf_tui_render(input->points, input->point_count, 5, &all[current], current,
+                  (size_t)frame_count, timings[current], "cuda-strict", &state);
     for (;;) {
         int action = bf_tui_poll(&state, state.paused ? -1 : 500);
         if (action == BF_TUI_QUIT) break;
@@ -130,12 +139,57 @@ static int tui_cuda_command(const char *model_path, int frame_count, char **path
         if (action == BF_TUI_NEXT || (action == BF_TUI_NONE && !state.paused)) current = (current + 1) % (size_t)frame_count;
         else if (action == BF_TUI_PREV) current = (current + (size_t)frame_count - 1) % (size_t)frame_count;
         if (current != prior) bf_tui_update_tracks(&state, &all[current], current);
-        if (action != BF_TUI_NONE || current != prior) bf_tui_render(&all[current], current, (size_t)frame_count, timings[current], "cuda-strict", &state);
+        if (action != BF_TUI_NONE || current != prior) {
+            input = bf_frame_input_view(files[current]);
+            bf_tui_render(input->points, input->point_count, 5, &all[current],
+                          current, (size_t)frame_count, timings[current],
+                          "cuda-strict", &state);
+        }
     }
-    bf_tui_end(); free(timings); free(all); bf_cuda_runtime_destroy(runtime); return 0;
+    bf_tui_end(); close_frame_sequence(files, frame_count); free(timings);
+    free(all); bf_cuda_runtime_destroy(runtime); return 0;
 failure:
     fprintf(stderr, "bevfusion: %s\n", error[0] ? error : "allocation failed");
-    free(timings); free(all); bf_cuda_runtime_destroy(runtime); return 1;
+    close_frame_sequence(files, frame_count); free(timings); free(all);
+    bf_cuda_runtime_destroy(runtime); return 1;
+}
+
+static int render_cuda_command(const char *model_path, int frame_index,
+                               int frame_total, int columns, int rows,
+                               int frame_count, char **paths) {
+    if (columns < 32 || columns > 200 || rows < 10 || rows > 80 ||
+        frame_count < 1 || frame_index < 0 || frame_total < 1 ||
+        frame_index >= frame_total) {
+        fputs("bevfusion: invalid render-cuda index, total, terminal size, or frames\n",
+              stderr);
+        return 2;
+    }
+    char error[256] = {0}; bf_cuda_runtime *runtime = NULL;
+    bf_frame_file *file = NULL; bf_detections detections = {0};
+    bf_tui_state state; bf_tui_state_init(&state);
+    state.show_sidebar = 1; state.paused = 1;
+    double elapsed = 0.0; int ok = bf_cuda_runtime_create(model_path, 300000,
+        160000, 160000, &runtime, error, sizeof(error));
+    for (int i = 0; i < frame_count && ok; ++i) {
+        bf_frame_close(file); file = NULL;
+        ok = bf_frame_open(paths[i], &file, error, sizeof(error)) &&
+             run_cuda_frame(runtime, file, &detections, &elapsed,
+                            error, sizeof(error));
+        if (ok) bf_tui_update_tracks(&state, &detections, (size_t)i);
+    }
+    bf_tui_frame output = {0};
+    if (ok) {
+        const bf_frame_input *input = bf_frame_input_view(file);
+        ok = bf_tui_compose(input->points, input->point_count, 5, &detections,
+                            (size_t)frame_index, (size_t)frame_total,
+                            elapsed, "cuda-strict / nuScenes", &state,
+                            columns, rows, &output);
+    }
+    if (ok && fwrite(output.data, 1, output.length, stdout) != output.length)
+        ok = 0;
+    if (!ok) fprintf(stderr, "bevfusion: %s\n", error[0] ? error : "render failed");
+    bf_tui_frame_free(&output); bf_frame_close(file);
+    bf_cuda_runtime_destroy(runtime); return ok ? 0 : 1;
 }
 #endif
 
@@ -144,15 +198,13 @@ static int tui_command(const char *model_path, int frame_count, char **paths) {
     bf_runtime *runtime = NULL;
     bf_detections *all = calloc((size_t)frame_count, sizeof(*all));
     double *timings = calloc((size_t)frame_count, sizeof(*timings));
-    if (!all || !timings || !bf_runtime_create(model_path, &runtime,
+    bf_frame_file **files = calloc((size_t)frame_count, sizeof(*files));
+    if (!all || !timings || !files || !bf_runtime_create(model_path, &runtime,
                                                 error, sizeof(error))) goto failure;
     for (int i = 0; i < frame_count; ++i) {
-        bf_frame_file *file = NULL;
-        if (!bf_frame_open(paths[i], &file, error, sizeof(error)) ||
-            !run_frame(runtime, file, &all[i], &timings[i], error, sizeof(error))) {
-            bf_frame_close(file); goto failure;
-        }
-        bf_frame_close(file);
+        if (!bf_frame_open(paths[i], &files[i], error, sizeof(error)) ||
+            !run_frame(runtime, files[i], &all[i], &timings[i], error, sizeof(error)))
+            goto failure;
     }
     bf_tui_state state;
     if (!bf_tui_begin(&state)) {
@@ -161,8 +213,9 @@ static int tui_command(const char *model_path, int frame_count, char **paths) {
     }
     size_t current = 0;
     bf_tui_update_tracks(&state, &all[current], current);
-    bf_tui_render(&all[current], current, (size_t)frame_count,
-                  timings[current], "cpu-ref", &state);
+    const bf_frame_input *input = bf_frame_input_view(files[current]);
+    bf_tui_render(input->points, input->point_count, 5, &all[current], current,
+                  (size_t)frame_count, timings[current], "cpu-ref", &state);
     for (;;) {
         int action = bf_tui_poll(&state, state.paused ? -1 : 500);
         if (action == BF_TUI_QUIT) break;
@@ -172,14 +225,19 @@ static int tui_command(const char *model_path, int frame_count, char **paths) {
         else if (action == BF_TUI_PREV)
             current = (current + (size_t)frame_count - 1) % (size_t)frame_count;
         if (current != prior) bf_tui_update_tracks(&state, &all[current], current);
-        if (action != BF_TUI_NONE || current != prior)
-            bf_tui_render(&all[current], current, (size_t)frame_count,
-                          timings[current], "cpu-ref", &state);
+        if (action != BF_TUI_NONE || current != prior) {
+            input = bf_frame_input_view(files[current]);
+            bf_tui_render(input->points, input->point_count, 5, &all[current],
+                          current, (size_t)frame_count, timings[current],
+                          "cpu-ref", &state);
+        }
     }
-    bf_tui_end(); free(timings); free(all); bf_runtime_destroy(runtime); return 0;
+    bf_tui_end(); close_frame_sequence(files, frame_count); free(timings);
+    free(all); bf_runtime_destroy(runtime); return 0;
 failure:
     fprintf(stderr, "bevfusion: %s\n", error[0] ? error : "allocation failed");
-    free(timings); free(all); bf_runtime_destroy(runtime); return 1;
+    close_frame_sequence(files, frame_count); free(timings); free(all);
+    bf_runtime_destroy(runtime); return 1;
 }
 
 int main(int argc, char **argv) {
@@ -227,6 +285,16 @@ int main(int argc, char **argv) {
         return infer_cuda_command(argv[2], argv[3]);
     if (argc >= 4 && strcmp(argv[1], "tui-cuda") == 0)
         return tui_cuda_command(argv[2], argc - 3, argv + 3);
+    if (argc >= 8 && strcmp(argv[1], "render-cuda") == 0) {
+        char *ends[4] = {NULL, NULL, NULL, NULL}; long values[4];
+        for (int i = 0; i < 4; ++i) values[i] = strtol(argv[i + 3], &ends[i], 10);
+        if (!ends[0] || *ends[0] || !ends[1] || *ends[1] ||
+            !ends[2] || *ends[2] || !ends[3] || *ends[3])
+            return 2;
+        return render_cuda_command(argv[2], (int)values[0], (int)values[1],
+                                   (int)values[2], (int)values[3],
+                                   argc - 7, argv + 7);
+    }
 #endif
     if (argc != 3 || strcmp(argv[1], "inspect") != 0) {
         usage(argv[0]); return 2;

@@ -5,7 +5,8 @@
 Build a small, auditable C11 inference runtime for the supplied OpenPCDet
 BEVFusion checkpoint. It must execute lidar, six-camera, LSS projection,
 fusion, TransFusion decoding, and rotated NMS; provide complete CPU and CUDA
-backends; and visualize canonical decoded detections in a metric BEV-only TUI.
+backends; and visualize canonical decoded detections over the real LiDAR
+occupancy of the same frame in a metric BEV TUI.
 
 ## Runtime contract
 
@@ -18,8 +19,10 @@ backends; and visualize canonical decoded detections in a metric BEV-only TUI.
 - Fusion: `336 -> 256`, two-stage BEV backbone, 512-channel concatenation.
 - Output: TransFusion, 200 proposals, ten nuScenes classes, center/height/
   dimensions/yaw/velocity/score, decoded once into `bf_detections`.
-- Visualization: metric BEV only; never a point-cloud view. Evaluation and TUI
-  consume the same `bf_detections` representation.
+- Visualization: metric BEV only. Evaluation and TUI consume the same
+  `bf_detections` representation; the TUI additionally receives the canonical
+  BFI `[P,5]` LiDAR tensor as a read-only input layer. This layer is explicitly
+  labelled LiDAR occupancy, not model-predicted semantic occupancy.
 
 The checkpoint contains 583 state entries and 163,487,704 tensor bytes before
 removing training counters. The offline exporter preserves FP32 and required
@@ -102,10 +105,55 @@ BFI v1 is the executable input boundary: a canonical little-endian,
 CRC32-protected, mmap-backed container for normalized images, five-component
 points, and all calibration/augmentation matrices. The loader validates exact
 section order and size arithmetic plus every input float before exposing a
-`bf_frame_input` view. The CLI now supports model inspection, resource plans,
-JSON inference, and sequences in the BEV-only TUI. The TUI never accepts a
-point tensor; it consumes only `bf_detections` and draws metric rings, axes,
-rotated boxes, velocity, filters, selection, and bounded nearest-class trails.
+`bf_frame_input` view. The CLI supports model inspection, resource plans, JSON
+inference, and sequences in the BEV TUI. Each sequence frame keeps its
+validated BFI mapping alive while the viewer runs, so the renderer can consume
+both the canonical `bf_detections` and the exact LiDAR points that produced
+them without another copy or parser. The occupancy layer is density-aware and
+height-shaded; rotated boxes use a lightly filled footprint, a distinct
+heading edge, velocity, filters, selection, and bounded nearest-class trails.
+
+## TUI candidate contract (2026-07-18)
+
+### Baseline
+
+The committed viewer draws box outlines on rings. Its public compose API has
+no frame-input argument, its CLI closes each BFI immediately after inference,
+and its tests explicitly reject point-cloud text. Therefore it cannot render
+BEV occupancy and provides no visual evidence that detections align with the
+sensor input.
+
+### Candidate TUI-1: canonical LiDAR occupancy
+
+- Input: finite FP32 `[P,5]` BFI points in `(x,y,z,intensity,timestamp)` order,
+  plus canonical decoded detections from the same frame.
+- Projection: metric top-down only, using the same pan/zoom/yaw transform for
+  occupancy, boxes, tracks, velocities, rings, and ego marker.
+- Occupancy: every in-view point contributes to a Braille sample; height and
+  return density control luminance. `o` toggles the layer independently.
+- Boxes: class-coloured rotated footprints, confidence-aware dithered fill,
+  brighter perimeter and front heading edge. The selected box exposes class,
+  score, center, dimensions, yaw, and velocity in the inspector.
+- Ownership: BFI mappings remain owned by the CLI for the TUI lifetime. The
+  compositor borrows point/detection pointers and owns only its bounded
+  terminal-resolution raster and output string.
+- Responsive behavior: below the minimum terminal size, render a deterministic
+  resize message; hide the inspector before shrinking the scene canvas.
+- Failure behavior: reject invalid point stride, null points with nonzero
+  count, nonsensical dimensions, and allocation failure without changing
+  terminal state.
+
+### Validation and promotion
+
+- `make build/test_tui && ./build/test_tui` proves deterministic composition,
+  occupancy toggling, height/density response, box/inspector fields, input
+  queue behavior, and a matrix of terminal sizes.
+- `make build/bevfusion` proves both CLI call paths compile against the new
+  borrowed-frame API.
+- A real BFI snapshot must contain the occupancy legend/count and canonical
+  box header. Sanitizer validation follows after functional promotion.
+- Promote only if the same fixture is byte-stable across repeated composition
+  and all pre-existing track/filter/navigation behavior remains covered.
 
 CUDA LSS began with a strict atomic baseline, then followed a measured
 candidate funnel. Merely precomputing flattened cell ranks remained correct

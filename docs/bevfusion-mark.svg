@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-labelledby="title desc">
+  <title id="title">BEVFusion.c mark</title>
+  <desc id="desc">Two sensor lines meet at one point on a bird's-eye plane.</desc>
+  <path d="M13 60 48 18l35 20-35 40Z" fill="#111827"/>
+  <path d="M13 60 48 48 83 38" fill="none" stroke="#22d3ee" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M25 24 48 48 72 75" fill="none" stroke="#f8fafc" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="48" cy="48" r="6" fill="#f43f5e"/>
+</svg>

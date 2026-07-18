@@ -1,23 +1,60 @@
 CC ?= cc
-NVCC ?= /usr/local/cuda-12.4/bin/nvcc
+NVCC ?= nvcc
+CUDA_ARCH ?= sm_89
+CUDAFLAGS ?= -O3 -lineinfo -arch=$(CUDA_ARCH)
 PYTHON ?= python3
 CFLAGS ?= -O3 -march=native -std=c11 -Wall -Wextra -Wpedantic
 CPPFLAGS += -Iinclude
-MODEL ?= bevfusion.bfw
-CHECKPOINT ?= ckpts/cbgs_bevfusion.pth
+NUSCENES_ROOT ?= /data/nuscenes
+DEMO_DIR ?= $(NUSCENES_ROOT)/bevfusion-demo
+MODEL ?= $(DEMO_DIR)/bevfusion.bfw
+CHECKPOINT ?= $(NUSCENES_ROOT)/checkpoints/cbgs_bevfusion.pth
+DEMO_COUNT ?= 12
+DEMO_MANIFEST ?= $(DEMO_DIR)/manifest.json
+DEMO_FRAME ?= $(DEMO_DIR)/frame-000.bfi
 RUNTIME_SOURCES = src/runtime.c src/model.c src/kernels_ref.c src/voxel.c \
 	src/swin.c src/swin_backbone.c src/image_fpn.c src/depth_raster.c \
 	src/depth_head.c src/lss.c src/lss_downsample.c src/lidar_backbone.c \
 	src/bev_stage.c src/transfusion.c src/transfusion_decoder.c
 CLI_SOURCES = src/frame.c src/tui.c
 
-.PHONY: all model test portable-test cuda-test clean
+.PHONY: all doctor demo demo-data demo-gif quickstart model test portable-test cuda-test clean
 
-all: build/bevfusion
+all: build/bevfusion build/bevfusion_cuda
+
+doctor:
+	@printf 'BEVFusion.c environment\n'
+	@printf '  C compiler:  '; command -v $(CC) || true
+	@printf '  Python:      '; command -v $(PYTHON) || true
+	@printf '  CUDA:        '; command -v $(NVCC) || printf 'optional (not found)\n'
+	@if [ -f "$(CHECKPOINT)" ]; then printf '  checkpoint:  %s\n' "$(CHECKPOINT)"; else printf '  checkpoint:  missing (only needed for real inference)\n'; fi
+	@if [ -f "$(MODEL)" ]; then printf '  model:       %s\n' "$(MODEL)"; else printf '  model:       run make model after adding the checkpoint\n'; fi
+	@printf '  nuScenes:    %s\n' "$(NUSCENES_ROOT)"
+	@if [ -f "$(DEMO_MANIFEST)" ]; then printf '  demo data:   %s\n' "$(DEMO_MANIFEST)"; else printf '  demo data:   run make demo-data\n'; fi
+
+demo: build/bevfusion_cuda model $(DEMO_MANIFEST)
+	./build/bevfusion_cuda tui-cuda "$(MODEL)" "$(DEMO_DIR)"/frame-*.bfi
+
+demo-data: $(DEMO_MANIFEST)
+
+$(DEMO_MANIFEST): tools/prepare_nuscenes_demo.py tools/prepare_nuscenes.py tools/pack_frame.py
+	$(PYTHON) tools/prepare_nuscenes_demo.py --root "$(NUSCENES_ROOT)" \
+		--output "$(DEMO_DIR)" --count "$(DEMO_COUNT)"
+
+demo-gif: build/bevfusion_cuda model $(DEMO_MANIFEST)
+	$(PYTHON) scripts/render_demo.py ./build/bevfusion_cuda docs/bevfusion-demo.gif \
+		"$(MODEL)" "$(DEMO_DIR)"
+
+quickstart: demo
 
 model: $(MODEL)
 
+$(CHECKPOINT):
+	@printf 'missing checkpoint: %s\nPlace cbgs_bevfusion.pth under /data/nuscenes/checkpoints or override CHECKPOINT=/path/to/file.\n' "$@"
+	@false
+
 $(MODEL): tools/export_checkpoint.py $(CHECKPOINT)
+	mkdir -p "$(dir $(MODEL))"
 	$(PYTHON) tools/export_checkpoint.py $(CHECKPOINT) $@
 
 build/bevfusion: src/main.c $(RUNTIME_SOURCES) $(CLI_SOURCES) include/bevfusion.h include/bf_model.h include/bf_runtime.h include/bf_frame.h include/bf_tui.h
@@ -158,7 +195,7 @@ build/frame_cuda_test.o: src/frame.c include/bf_frame.h include/bf_runtime.h
 
 build/test_cuda_depth_raster: tests/test_cuda_depth_raster.cu src/cuda_depth_raster.cu build/depth_raster_cuda_test.o include/bf_cuda_depth_raster.h
 	mkdir -p build
-	$(NVCC) $(CPPFLAGS) -O3 -arch=sm_89 tests/test_cuda_depth_raster.cu src/cuda_depth_raster.cu build/depth_raster_cuda_test.o -o $@
+	$(NVCC) $(CPPFLAGS) $(CUDAFLAGS) tests/test_cuda_depth_raster.cu src/cuda_depth_raster.cu build/depth_raster_cuda_test.o -o $@
 
 CUDA_RUNTIME_SOURCES = src/cuda_runtime.cu src/cuda_depth_raster.cu src/cuda_voxel.cu src/cuda_lidar.cu src/cuda_swin.cu src/cuda_camera.cu src/cuda_lss.cu src/cuda_bev_stage.cu src/cuda_transfusion.cu
 CUDA_C_SOURCES = src/main.c $(RUNTIME_SOURCES) $(CLI_SOURCES)
@@ -170,53 +207,53 @@ build/cuda_c_%.o: src/%.c
 
 build/bevfusion_cuda: $(CUDA_C_OBJECTS) $(CUDA_RUNTIME_SOURCES)
 	mkdir -p build
-	$(NVCC) $(CPPFLAGS) -O3 -arch=sm_89 $(CUDA_C_OBJECTS) $(CUDA_RUNTIME_SOURCES) -lcudnn -lcublas -o $@
+	$(NVCC) $(CPPFLAGS) $(CUDAFLAGS) $(CUDA_C_OBJECTS) $(CUDA_RUNTIME_SOURCES) -lcudnn -lcublas -o $@
 
 build/test_cuda_runtime: tests/test_cuda_runtime.cu $(CUDA_RUNTIME_SOURCES) build/model_cuda_test.o build/frame_cuda_test.o include/bf_cuda_runtime.h
 	mkdir -p build
-	$(NVCC) $(CPPFLAGS) -O3 -arch=sm_89 tests/test_cuda_runtime.cu $(CUDA_RUNTIME_SOURCES) build/model_cuda_test.o build/frame_cuda_test.o -lcudnn -lcublas -o $@
+	$(NVCC) $(CPPFLAGS) $(CUDAFLAGS) tests/test_cuda_runtime.cu $(CUDA_RUNTIME_SOURCES) build/model_cuda_test.o build/frame_cuda_test.o -lcudnn -lcublas -o $@
 
 build/test_cuda_lss: tests/test_cuda_lss.cu src/cuda_lss.cu build/model_cuda_test.o include/bf_cuda.h include/bf_lss.h include/bf_model.h
 	mkdir -p build
-	$(NVCC) $(CPPFLAGS) -O3 -arch=sm_89 tests/test_cuda_lss.cu src/cuda_lss.cu build/model_cuda_test.o -o $@
+	$(NVCC) $(CPPFLAGS) $(CUDAFLAGS) tests/test_cuda_lss.cu src/cuda_lss.cu build/model_cuda_test.o -o $@
 
 build/test_cuda_bev_stage: tests/test_cuda_bev_stage.cu src/cuda_bev_stage.cu build/model_cuda_test.o include/bf_cuda_bev.h include/bf_model.h
 	mkdir -p build
-	$(NVCC) $(CPPFLAGS) -O3 -arch=sm_89 tests/test_cuda_bev_stage.cu src/cuda_bev_stage.cu build/model_cuda_test.o -lcudnn -o $@
+	$(NVCC) $(CPPFLAGS) $(CUDAFLAGS) tests/test_cuda_bev_stage.cu src/cuda_bev_stage.cu build/model_cuda_test.o -lcudnn -o $@
 
 build/test_cuda_transfusion: tests/test_cuda_transfusion.cu src/cuda_transfusion.cu build/model_cuda_test.o include/bf_cuda_transfusion.h include/bf_transfusion_decoder.h include/bf_model.h
 	mkdir -p build
-	$(NVCC) $(CPPFLAGS) -O3 -arch=sm_89 tests/test_cuda_transfusion.cu src/cuda_transfusion.cu build/model_cuda_test.o -lcublas -o $@
+	$(NVCC) $(CPPFLAGS) $(CUDAFLAGS) tests/test_cuda_transfusion.cu src/cuda_transfusion.cu build/model_cuda_test.o -lcublas -o $@
 
 build/test_cuda_tail: tests/test_cuda_tail.cu src/cuda_bev_stage.cu src/cuda_transfusion.cu build/model_cuda_test.o include/bf_cuda_bev.h include/bf_cuda_transfusion.h
 	mkdir -p build
-	$(NVCC) $(CPPFLAGS) -O3 -arch=sm_89 tests/test_cuda_tail.cu src/cuda_bev_stage.cu src/cuda_transfusion.cu build/model_cuda_test.o -lcudnn -lcublas -o $@
+	$(NVCC) $(CPPFLAGS) $(CUDAFLAGS) tests/test_cuda_tail.cu src/cuda_bev_stage.cu src/cuda_transfusion.cu build/model_cuda_test.o -lcudnn -lcublas -o $@
 
 build/test_cuda_camera: tests/test_cuda_camera.cu src/cuda_camera.cu src/cuda_lss.cu build/model_cuda_test.o include/bf_cuda_camera.h include/bf_cuda.h
 	mkdir -p build
-	$(NVCC) $(CPPFLAGS) -O3 -arch=sm_89 tests/test_cuda_camera.cu src/cuda_camera.cu src/cuda_lss.cu build/model_cuda_test.o -lcudnn -o $@
+	$(NVCC) $(CPPFLAGS) $(CUDAFLAGS) tests/test_cuda_camera.cu src/cuda_camera.cu src/cuda_lss.cu build/model_cuda_test.o -lcudnn -o $@
 
 build/test_cuda_swin: tests/test_cuda_swin.cu src/cuda_swin.cu build/model_cuda_test.o include/bf_cuda_swin.h
 	mkdir -p build
-	$(NVCC) $(CPPFLAGS) -O3 -arch=sm_89 tests/test_cuda_swin.cu src/cuda_swin.cu build/model_cuda_test.o -lcudnn -lcublas -o $@
+	$(NVCC) $(CPPFLAGS) $(CUDAFLAGS) tests/test_cuda_swin.cu src/cuda_swin.cu build/model_cuda_test.o -lcudnn -lcublas -o $@
 
 build/test_cuda_camera_full: tests/test_cuda_camera_full.cu src/cuda_swin.cu src/cuda_camera.cu src/cuda_lss.cu build/model_cuda_test.o include/bf_cuda_swin.h include/bf_cuda_camera.h include/bf_cuda.h
 	mkdir -p build
-	$(NVCC) $(CPPFLAGS) -O3 -arch=sm_89 tests/test_cuda_camera_full.cu src/cuda_swin.cu src/cuda_camera.cu src/cuda_lss.cu build/model_cuda_test.o -lcudnn -lcublas -o $@
+	$(NVCC) $(CPPFLAGS) $(CUDAFLAGS) tests/test_cuda_camera_full.cu src/cuda_swin.cu src/cuda_camera.cu src/cuda_lss.cu build/model_cuda_test.o -lcudnn -lcublas -o $@
 
 build/test_cuda_lidar: tests/test_cuda_lidar.cu src/cuda_lidar.cu src/cuda_voxel.cu build/model_cuda_test.o include/bf_cuda_lidar.h include/bf_cuda_voxel.h
 	mkdir -p build
-	$(NVCC) $(CPPFLAGS) -O3 -arch=sm_89 tests/test_cuda_lidar.cu src/cuda_lidar.cu src/cuda_voxel.cu build/model_cuda_test.o -o $@
+	$(NVCC) $(CPPFLAGS) $(CUDAFLAGS) tests/test_cuda_lidar.cu src/cuda_lidar.cu src/cuda_voxel.cu build/model_cuda_test.o -o $@
 
 build/test_cuda_voxel: tests/test_cuda_voxel.cu src/cuda_voxel.cu include/bf_cuda_voxel.h
 	mkdir -p build
-	$(NVCC) $(CPPFLAGS) -O3 -arch=sm_89 tests/test_cuda_voxel.cu src/cuda_voxel.cu -o $@
+	$(NVCC) $(CPPFLAGS) $(CUDAFLAGS) tests/test_cuda_voxel.cu src/cuda_voxel.cu -o $@
 
 build/test_cuda_voxel_real: tests/test_cuda_voxel_real.cu src/cuda_voxel.cu build/voxel_cuda_test.o build/kernels_cuda_test.o build/frame_cuda_test.o include/bf_cuda_voxel.h
 	mkdir -p build
-	$(NVCC) $(CPPFLAGS) -O3 -arch=sm_89 tests/test_cuda_voxel_real.cu src/cuda_voxel.cu build/voxel_cuda_test.o build/kernels_cuda_test.o build/frame_cuda_test.o -lm -o $@
+	$(NVCC) $(CPPFLAGS) $(CUDAFLAGS) tests/test_cuda_voxel_real.cu src/cuda_voxel.cu build/voxel_cuda_test.o build/kernels_cuda_test.o build/frame_cuda_test.o -lm -o $@
 
-cuda-test: model build/kernel_oracle.bfw build/bev_stage_oracle.bfw build/transfusion_decoder_oracle.bfw build/cuda_tail_oracle.bfw build/image_fpn_oracle.bfw build/depth_head_oracle.bfw build/lss_downsample_oracle.bfw build/swin_backbone_oracle.bfw build/cuda_camera_full_oracle.bfw build/lidar_backbone_oracle.bfw build/test_cuda_depth_raster build/test_cuda_lss build/test_cuda_bev_stage build/test_cuda_transfusion build/test_cuda_tail build/test_cuda_camera build/test_cuda_swin build/test_cuda_camera_full build/test_cuda_voxel build/test_cuda_voxel_real build/test_cuda_lidar build/test_cuda_runtime build/bevfusion_cuda
+cuda-test: model $(DEMO_MANIFEST) build/kernel_oracle.bfw build/bev_stage_oracle.bfw build/transfusion_decoder_oracle.bfw build/cuda_tail_oracle.bfw build/image_fpn_oracle.bfw build/depth_head_oracle.bfw build/lss_downsample_oracle.bfw build/swin_backbone_oracle.bfw build/cuda_camera_full_oracle.bfw build/lidar_backbone_oracle.bfw build/test_cuda_depth_raster build/test_cuda_lss build/test_cuda_bev_stage build/test_cuda_transfusion build/test_cuda_tail build/test_cuda_camera build/test_cuda_swin build/test_cuda_camera_full build/test_cuda_voxel build/test_cuda_voxel_real build/test_cuda_lidar build/test_cuda_runtime build/bevfusion_cuda
 	./build/test_cuda_depth_raster
 	./build/test_cuda_lss build/kernel_oracle.bfw
 	./build/test_cuda_bev_stage $(MODEL) build/bev_stage_oracle.bfw
@@ -226,9 +263,9 @@ cuda-test: model build/kernel_oracle.bfw build/bev_stage_oracle.bfw build/transf
 	./build/test_cuda_swin $(MODEL) build/swin_backbone_oracle.bfw
 	./build/test_cuda_camera_full $(MODEL) build/cuda_camera_full_oracle.bfw
 	./build/test_cuda_voxel
-	./build/test_cuda_voxel_real runs/real-mini/frame0.bfi
+	./build/test_cuda_voxel_real $(DEMO_FRAME)
 	./build/test_cuda_lidar $(MODEL) build/lidar_backbone_oracle.bfw
-	./build/test_cuda_runtime $(MODEL) runs/real-mini/frame0.bfi
+	./build/test_cuda_runtime $(MODEL) $(DEMO_FRAME)
 
 test: model build/bevfusion build/test_model build/kernel_oracle.bfw build/depth_raster_oracle.bfw build/bev_stage_oracle.bfw build/swin_backbone_oracle.bfw build/image_fpn_oracle.bfw build/depth_head_oracle.bfw build/lss_downsample_oracle.bfw build/lidar_backbone_oracle.bfw build/transfusion_decoder_oracle.bfw build/test_kernels build/test_depth_raster build/test_lss build/test_swin build/test_transfusion build/test_bev_stage build/test_swin_backbone build/test_image_fpn build/test_depth_head build/test_lss_downsample build/test_lidar_backbone build/test_transfusion_decoder build/test_runtime build/test_tui build/test_frame
 	./build/test_model $(MODEL)

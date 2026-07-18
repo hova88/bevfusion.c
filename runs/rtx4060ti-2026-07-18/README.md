@@ -33,6 +33,11 @@ memory-safety pass. Oracle output and ordinary CUDA error checks still passed.
 
 ## LSS candidate funnel
 
+The first two LSS rows in the repository-level `benchmark.csv` are an earlier
+synthetic exploratory pair (`83.652 / 86.601 ms` warm). The ladder below is the
+later five-process audited experiment that added rank, interval, layout, and
+direct-calibration controls. They are distinct runs, not conflicting summaries.
+
 Five independent `test_cuda_lss` processes at production shape produced these
 medians:
 
