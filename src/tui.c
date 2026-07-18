@@ -23,8 +23,8 @@ static const int class_colors[10] = {51, 208, 220, 39, 141, 244, 201, 45, 82, 21
 enum {
     PIX_GRID = 1, PIX_AXIS, PIX_OCC_OLD, PIX_OCC_GROUND, PIX_OCC_LOW,
     PIX_OCC_HIGH, PIX_TRACK_BASE = 10, PIX_VELOCITY_BASE = 20,
-    PIX_BOX_FILL_BASE = 30, PIX_BOX_EDGE_BASE = 40, PIX_BOX_FRONT_BASE = 50,
-    PIX_SELECTED_FILL = 60, PIX_SELECTED_EDGE = 70, PIX_EGO = 80
+    PIX_BOX_EDGE_BASE = 40, PIX_BOX_FRONT_BASE = 50,
+    PIX_SELECTED_EDGE = 70, PIX_EGO = 80
 };
 static struct termios saved_termios;
 static int terminal_active;
@@ -268,58 +268,25 @@ static void project(float x, float y, const view *v, int *px, int *py) {
     *py = (int)lrintf(v->h * 0.5f - forward * v->scale);
 }
 
-static int inside_quad(int px, int py, const int x[4], const int y[4]) {
-    int have_positive = 0, have_negative = 0;
-    for (int i = 0; i < 4; ++i) {
-        int j = (i + 1) & 3;
-        long long cross = (long long)(x[j] - x[i]) * (py - y[i]) -
-                          (long long)(y[j] - y[i]) * (px - x[i]);
-        have_positive |= cross > 0;
-        have_negative |= cross < 0;
-    }
-    return !(have_positive && have_negative);
-}
-
 static void draw_box(unsigned char *pixels, const view *v,
                      const bf_detection *d, int selected) {
     float cs = cosf(d->yaw), sn = sinf(d->yaw);
-    float local_x[4] = {d->length * .5f, d->length * .5f, -d->length * .5f, -d->length * .5f};
-    float local_y[4] = {d->width * .5f, -d->width * .5f, -d->width * .5f, d->width * .5f};
+    /* The model emits OpenPCDet [dx,dy,dz]: dx follows yaw, dy is lateral. */
+    float local_x[4] = {d->width * .5f, d->width * .5f,
+                        -d->width * .5f, -d->width * .5f};
+    float local_y[4] = {d->length * .5f, -d->length * .5f,
+                        -d->length * .5f, d->length * .5f};
     int x[4], y[4];
     for (size_t i = 0; i < 4; ++i)
         project(d->x + local_x[i] * cs - local_y[i] * sn,
                 d->y + local_x[i] * sn + local_y[i] * cs, v, &x[i], &y[i]);
-    unsigned char fill = selected ? PIX_SELECTED_FILL :
-        (unsigned char)(PIX_BOX_FILL_BASE + d->class_id);
     unsigned char edge = selected ? PIX_SELECTED_EDGE :
         (unsigned char)(PIX_BOX_EDGE_BASE + d->class_id);
     unsigned char front = selected ? PIX_SELECTED_EDGE :
         (unsigned char)(PIX_BOX_FRONT_BASE + d->class_id);
-    int min_x = x[0], max_x = x[0], min_y = y[0], max_y = y[0];
-    for (int i = 1; i < 4; ++i) {
-        if (x[i] < min_x) min_x = x[i];
-        if (x[i] > max_x) max_x = x[i];
-        if (y[i] < min_y) min_y = y[i];
-        if (y[i] > max_y) max_y = y[i];
-    }
-    if (min_x < 0) min_x = 0;
-    if (max_x >= v->w) max_x = v->w - 1;
-    if (min_y < 0) min_y = 0;
-    if (max_y >= v->h) max_y = v->h - 1;
-    int coverage = 1 + (int)fminf(4.0f, fmaxf(0.0f, d->score) * 4.0f);
-    for (int py = min_y; py <= max_y; ++py)
-        for (int px = min_x; px <= max_x; ++px)
-            if ((((px * 3 + py * 5) & 7) < coverage) &&
-                inside_quad(px, py, x, y))
-                plot(pixels, v->w, v->h, px, py, fill);
     for (size_t i = 0; i < 4; ++i)
         line(pixels, v->w, v->h, x[i], y[i], x[(i + 1) & 3], y[(i + 1) & 3],
              i == 0 ? front : edge);
-    int center_x, center_y, nose_x, nose_y;
-    project(d->x, d->y, v, &center_x, &center_y);
-    project(d->x + d->length * .5f * cs, d->y + d->length * .5f * sn,
-            v, &nose_x, &nose_y);
-    line(pixels, v->w, v->h, center_x, center_y, nose_x, nose_y, front);
 }
 
 static void braille(unsigned codepoint, char out[4]) {
@@ -331,10 +298,8 @@ static void braille(unsigned codepoint, char out[4]) {
 static int pixel_color(unsigned char value) {
     if (value == PIX_EGO) return 214;
     if (value >= PIX_SELECTED_EDGE) return 231;
-    if (value >= PIX_SELECTED_FILL) return 226;
     if (value >= PIX_BOX_FRONT_BASE) return class_colors[(value - PIX_BOX_FRONT_BASE) % 10];
     if (value >= PIX_BOX_EDGE_BASE) return class_colors[(value - PIX_BOX_EDGE_BASE) % 10];
-    if (value >= PIX_BOX_FILL_BASE) return class_colors[(value - PIX_BOX_FILL_BASE) % 10];
     if (value >= PIX_VELOCITY_BASE) return class_colors[(value - PIX_VELOCITY_BASE) % 10];
     if (value >= PIX_TRACK_BASE) return class_colors[(value - PIX_TRACK_BASE) % 10];
     if (value == PIX_OCC_HIGH) return 118;
@@ -483,7 +448,8 @@ int bf_tui_compose(const float *points, size_t point_count, size_t point_stride,
                 printf_b(&text, "\033[%d;38;5;%d;48;5;233m", mode,
                          pixel_color(priority));
             } else if (priority)
-                printf_b(&text, "\033[0;38;5;%d;48;5;233m",
+                printf_b(&text, "\033[%d;38;5;%d;48;5;233m",
+                         priority >= PIX_BOX_EDGE_BASE ? 1 : 0,
                          pixel_color(priority));
             else puts_b(&text, "\033[0;38;5;238;48;5;233m");
             char glyph[4]; braille(0x2800u + code, glyph); puts_b(&text, glyph);
@@ -509,7 +475,7 @@ int bf_tui_compose(const float *points, size_t point_count, size_t point_stride,
             else if (s->show_help && cy == 21) snprintf(side, sizeof(side), " [ ] select ,/. score q quit");
             else if (focus && cy == 17) { snprintf(side, sizeof(side), " %s  %.1f%%", class_names[focus->class_id], focus->score * 100.0f); color = class_colors[focus->class_id]; }
             else if (focus && cy == 18) snprintf(side, sizeof(side), " position %+.1f %+.1f %+.1f m", focus->x, focus->y, focus->z);
-            else if (focus && cy == 19) snprintf(side, sizeof(side), " size %.1f x %.1f x %.1f m", focus->length, focus->width, focus->height);
+            else if (focus && cy == 19) snprintf(side, sizeof(side), " size dx %.1f dy %.1f h %.1f m", focus->width, focus->length, focus->height);
             else if (focus && cy == 20) snprintf(side, sizeof(side), " heading %+.0f deg", focus->yaw * 57.29578f);
             else if (focus && cy == 21) snprintf(side, sizeof(side), " velocity %+.1f %+.1f m/s", focus->velocity_x, focus->velocity_y);
             else if (cy == 23) snprintf(side, sizeof(side), " OCC height + return density");

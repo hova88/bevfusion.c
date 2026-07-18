@@ -110,7 +110,7 @@ inference, and sequences in the BEV TUI. Each sequence frame keeps its
 validated BFI mapping alive while the viewer runs, so the renderer can consume
 both the canonical `bf_detections` and the exact LiDAR points that produced
 them without another copy or parser. The occupancy layer is density-aware and
-height-shaded; rotated boxes use a lightly filled footprint, a distinct
+height-shaded; rotated boxes use a bold class-colored outline, a distinct
 heading edge, velocity, filters, selection, and bounded nearest-class trails.
 
 ## TUI candidate contract (2026-07-18)
@@ -131,7 +131,7 @@ sensor input.
   occupancy, boxes, tracks, velocities, rings, and ego marker.
 - Occupancy: every in-view point contributes to a Braille sample; height and
   return density control luminance. `o` toggles the layer independently.
-- Boxes: class-coloured rotated footprints, confidence-aware dithered fill,
+- Boxes: class-coloured rotated outlines that preserve underlying occupancy,
   brighter perimeter and front heading edge. The selected box exposes class,
   score, center, dimensions, yaw, and velocity in the inspector.
 - Ownership: BFI mappings remain owned by the CLI for the TUI lifetime. The

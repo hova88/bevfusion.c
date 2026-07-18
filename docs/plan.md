@@ -14,7 +14,7 @@
    switches, validate numerically after each promoted change.
 7. **Canonical decode and BEV TUI** — retain validated BFI mappings for the
    viewer lifetime; render density/height-aware LiDAR occupancy under
-   confidence-filled metric boxes, velocity, rings, trails, and inspection;
+   bold metric box outlines, velocity, rings, trails, and inspection;
    preserve robust terminal restoration and a deterministic compose fixture.
 8. **Completion gates** — sanitizers, malformed inputs, CPU/CUDA oracles, real
    samples, official evaluation, cold/warm benchmarks, and peak memory reports.
