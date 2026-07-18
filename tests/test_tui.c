@@ -66,6 +66,8 @@ int main(void) {
              strstr(first.data, "FOCUS") && strstr(first.data, "position") &&
              strstr(first.data, "OCC height + return density") &&
              strstr(first.data, "velocity") &&
+             strstr(first.data, "\033[1;38;5;82;48;5;233m") &&
+             !strstr(first.data, "\033[0;38;5;226;48;5;233m") &&
              strstr(compact.data, "BEVFUSION") &&
              !strstr(first.data, "point cloud") && !strstr(first.data, "perspective");
     const int widths[] = {20, 31, 32, 36, 79, 80, 110, 160};
@@ -126,6 +128,6 @@ int main(void) {
     }
     bf_tui_frame_free(&first); bf_tui_frame_free(&second); bf_tui_frame_free(&compact);
     if (!ok) return 2;
-    puts("BEV occupancy, filled boxes, inspector, controls, and responsive layout pass");
+    puts("BEV occupancy, oriented box outlines, inspector, controls, and responsive layout pass");
     return 0;
 }

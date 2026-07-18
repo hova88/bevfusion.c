@@ -111,7 +111,7 @@ FRAMES=/data/nuscenes/bevfusion-demo/frame-*.bfi
 Both inference commands write canonical decoded detections as JSON. Both TUI
 commands retain the validated BFI mapping and render its `[P,5]` LiDAR tensor
 as density/height-aware occupancy under the same rotated boxes used by JSON
-decode. Confidence-aware footprint fill, a distinct heading edge, velocity,
+decode. Bold class-colored outlines, a distinct heading edge, velocity,
 class filters, selection, and short tracks share one metric transform on a
 responsive Braille BEV. This is input occupancy, not a semantic occupancy
 prediction.

@@ -10,8 +10,10 @@ Occupancy bins the same `[P,5]` points by metric location. Height, intensity,
 timestamp, and per-cell density select color and Braille weight. It is input
 occupancy and is never labeled as a semantic occupancy prediction.
 
-Boxes use metric width, length, yaw, velocity, score, and class. Their filled
-footprints are confidence-aware; the heading edge is distinct. The inspector
+Boxes use the model's metric `dx`, `dy`, yaw, velocity, score, and class. The
+first footprint dimension follows yaw and the second is lateral. Bold,
+class-colored outlines preserve the LiDAR points underneath; the heading edge
+is distinct. The inspector
 shows the selected box numerically. Range rings, short trails, filtering,
 pan/zoom/rotation, and all box layers share one transform in
 [`src/tui.c`](../src/tui.c).

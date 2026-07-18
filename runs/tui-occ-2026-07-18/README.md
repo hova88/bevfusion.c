@@ -13,8 +13,8 @@ transform. This is input occupancy, not a semantic occupancy prediction.
 - Model: `/data/nuscenes/bevfusion-demo/bevfusion.bfw`, exported from
   `/data/nuscenes/checkpoints/cbgs_bevfusion.pth`.
 - Hardware: NVIDIA GeForce RTX 4060 Ti 16 GB, strict CUDA runtime.
-- Visual layers: density/height-aware LiDAR occupancy, class boxes with
-  confidence-aware fill and heading edge, velocity, trails, rings, and ego.
+- Visual layers: density/height-aware LiDAR occupancy, bold class-colored box
+  outlines with a heading edge, velocity, trails, rings, and ego.
 - Ownership: the CLI retains validated mmap-backed BFI files for the viewer
   lifetime; the compositor borrows pointers and frees only its terminal raster.
 
@@ -30,7 +30,7 @@ make build/test_tui
 Result:
 
 ```text
-BEV occupancy, filled boxes, inspector, controls, and responsive layout pass
+BEV occupancy, oriented box outlines, inspector, controls, and responsive layout pass
 ```
 
 Address/undefined/leak sanitizer fixture:
@@ -95,8 +95,8 @@ make demo
 counts, and SHA-256 values in `manifest.json`. `render-cuda` is the deterministic
 non-interactive boundary used by `scripts/render_demo.py`; it runs the real
 CUDA graph before composing every frame. The checked-in 12-frame, 1000x570 GIF
-is 576,789 bytes and has SHA-256
-`0cc71be742a9a9707e9d850f26ca9fcd4caa5ae1fbda04d91032d300838e5d17`.
+is 588,455 bytes and has SHA-256
+`42c7047dc2293c5f2847aa8e10cf66b610666a0856d08b6d092635be957a1fa1`.
 The SVG mark has SHA-256
 `fa7bced5fa241fe4069ee152975836cb4c16c2f196cc4c790e2812b3dd5826fe`;
 its entire visual vocabulary is one plane, two lines, and one fusion point.
