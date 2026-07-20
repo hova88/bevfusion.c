@@ -134,9 +134,9 @@ size_t bf_depth_head_workspace_bytes(size_t height, size_t width) {
 
 static void bn_relu(float *values, const bf_bound_bn *bn,
                     size_t channels, size_t height, size_t width) {
-    bf_batch_norm_2d_f32_ref(values, bn->scale, bn->bias, bn->mean,
+    bf_batch_norm_2d_f32(values, bn->scale, bn->bias, bn->mean,
                              bn->variance, 1e-5f, values, 1, channels, height, width);
-    bf_relu_f32_ref(values, values, channels * height * width);
+    bf_relu_f32(values, values, channels * height * width);
 }
 
 static int conv_bn_relu(const float *input, const bf_bound_conv_bn *bound,
@@ -145,7 +145,7 @@ static int conv_bn_relu(const float *input, const bf_bound_conv_bn *bound,
                         size_t stride, size_t padding) {
     bf_conv2d_desc desc = {1, ci, height, width, co, kernel, kernel,
                            stride, stride, padding, padding, 1, 1, 1};
-    if (!bf_conv2d_f32_ref(input, bound->weight, bound->bias, output, &desc)) return 0;
+    if (!bf_conv2d_f32(input, bound->weight, bound->bias, output, &desc)) return 0;
     size_t out_h, out_w;
     if (!bf_conv2d_output_shape(&desc, &out_h, &out_w)) return 0;
     bn_relu(output, &bound->bn, co, out_h, out_w);
@@ -181,7 +181,7 @@ int bf_depth_head_forward_ref(const bf_depth_head *head,
             return fail(error, cap, "depth prediction trunk failed at camera %zu", b);
         bf_conv2d_desc final = {1, 256, height, width, 198, 1, 1,
                                 1, 1, 0, 0, 1, 1, 1};
-        if (!bf_conv2d_f32_ref(buffer_a, head->output_weight, head->output_bias,
+        if (!bf_conv2d_f32(buffer_a, head->output_weight, head->output_bias,
                                buffer_b, &final))
             return fail(error, cap, "depth prediction output failed at camera %zu", b);
         memcpy(logits + b * 118 * hw, buffer_b, 118 * hw * sizeof(float));

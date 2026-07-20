@@ -46,6 +46,11 @@ int bf_conv2d_output_shape(const bf_conv2d_desc *desc,
 int bf_conv2d_f32_ref(const float *input, const float *weight,
                       const float *bias, float *output,
                       const bf_conv2d_desc *desc);
+/* Production CPU dispatch: BLAS for eligible shapes, OpenMP when compiled,
+   otherwise the scalar reference. BF_CPU_SCALAR=1 forces the reference. */
+int bf_conv2d_f32(const float *input, const float *weight,
+                  const float *bias, float *output,
+                  const bf_conv2d_desc *desc);
 int bf_conv_transpose2d_output_shape(const bf_conv_transpose2d_desc *desc,
                                      size_t *out_height, size_t *out_width);
 int bf_conv_transpose2d_f32_ref(const float *input, const float *weight_iohw,
@@ -54,18 +59,32 @@ int bf_conv_transpose2d_f32_ref(const float *input, const float *weight_iohw,
 void bf_linear_f32_ref(const float *input, const float *weight,
                        const float *bias, float *output,
                        size_t rows, size_t in_features, size_t out_features);
+void bf_linear_f32(const float *input, const float *weight,
+                   const float *bias, float *output,
+                   size_t rows, size_t in_features, size_t out_features);
+const char *bf_cpu_kernel_backend(void);
 void bf_batch_norm_2d_f32_ref(const float *input, const float *scale,
                               const float *bias, const float *mean,
                               const float *variance, float epsilon,
                               float *output, size_t n, size_t channels,
                               size_t height, size_t width);
+void bf_batch_norm_2d_f32(const float *input, const float *scale,
+                          const float *bias, const float *mean,
+                          const float *variance, float epsilon,
+                          float *output, size_t n, size_t channels,
+                          size_t height, size_t width);
 void bf_layer_norm_f32_ref(const float *input, const float *scale,
                            const float *bias, float epsilon, float *output,
                            size_t rows, size_t channels);
+void bf_layer_norm_f32(const float *input, const float *scale,
+                       const float *bias, float epsilon, float *output,
+                       size_t rows, size_t channels);
 void bf_softmax_f32_ref(const float *input, float *output,
                         size_t rows, size_t columns);
 void bf_gelu_f32_ref(const float *input, float *output, size_t count);
 void bf_relu_f32_ref(const float *input, float *output, size_t count);
+void bf_gelu_f32(const float *input, float *output, size_t count);
+void bf_relu_f32(const float *input, float *output, size_t count);
 void bf_mean_vfe_f32_ref(const float *points, const int64_t *counts,
                          float *output, size_t voxels, size_t max_points,
                          size_t channels);

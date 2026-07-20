@@ -14,6 +14,63 @@ static float sigmoid(float value) {
     return exponent / (1.0f + exponent);
 }
 
+typedef struct {
+    float score;
+    size_t flat;
+} bf_proposal_candidate;
+
+/* "Worse" means lower score, then larger flat index. The tie rule matches the
+ * original repeated scan, which selected the first flat index on equal scores. */
+static int candidate_worse(bf_proposal_candidate a,
+                           bf_proposal_candidate b) {
+    return a.score < b.score || (a.score == b.score && a.flat > b.flat);
+}
+
+static int candidate_better(bf_proposal_candidate a,
+                            bf_proposal_candidate b) {
+    return a.score > b.score || (a.score == b.score && a.flat < b.flat);
+}
+
+static void heap_push_worst_root(bf_proposal_candidate *heap, size_t count,
+                                 bf_proposal_candidate value) {
+    size_t child = count;
+    heap[child] = value;
+    while (child) {
+        size_t parent = (child - 1) / 2;
+        if (!candidate_worse(heap[child], heap[parent])) break;
+        bf_proposal_candidate swap = heap[parent];
+        heap[parent] = heap[child];
+        heap[child] = swap;
+        child = parent;
+    }
+}
+
+static void heap_replace_worst(bf_proposal_candidate *heap, size_t count,
+                               bf_proposal_candidate value) {
+    heap[0] = value;
+    for (size_t parent = 0;;) {
+        size_t left = parent * 2 + 1;
+        if (left >= count) break;
+        size_t right = left + 1;
+        size_t worse = left;
+        if (right < count && candidate_worse(heap[right], heap[left]))
+            worse = right;
+        if (!candidate_worse(heap[worse], heap[parent])) break;
+        bf_proposal_candidate swap = heap[parent];
+        heap[parent] = heap[worse];
+        heap[worse] = swap;
+        parent = worse;
+    }
+}
+
+static int candidate_descending(const void *left, const void *right) {
+    const bf_proposal_candidate *a = left;
+    const bf_proposal_candidate *b = right;
+    if (a->score > b->score) return -1;
+    if (a->score < b->score) return 1;
+    return (a->flat > b->flat) - (a->flat < b->flat);
+}
+
 int bf_transfusion_select_proposals_f32_ref(
     const float *logits, float *suppressed, float *top_scores,
     int64_t *top_classes, int64_t *top_indices,
@@ -21,6 +78,7 @@ int bf_transfusion_select_proposals_f32_ref(
     size_t proposals, size_t kernel) {
     if (!logits || !suppressed || !top_scores || !top_classes || !top_indices ||
         !batches || !classes || !height || !width || !proposals ||
+        proposals > BF_MAX_PROPOSALS ||
         proposals > classes * height * width || !kernel || !(kernel & 1)) return 0;
     size_t spatial = height * width;
     size_t padding = kernel / 2;
@@ -48,25 +106,24 @@ int bf_transfusion_select_proposals_f32_ref(
                     suppressed[offset] = keep ? value : 0.0f;
                 }
         }
+        bf_proposal_candidate heap[BF_MAX_PROPOSALS];
+        size_t heap_count = 0;
+        for (size_t flat = 0; flat < classes * spatial; ++flat) {
+            bf_proposal_candidate candidate = {
+                suppressed[batch * classes * spatial + flat], flat
+            };
+            if (heap_count < proposals)
+                heap_push_worst_root(heap, heap_count++, candidate);
+            else if (candidate_better(candidate, heap[0]))
+                heap_replace_worst(heap, heap_count, candidate);
+        }
+        qsort(heap, heap_count, sizeof(*heap), candidate_descending);
         for (size_t rank = 0; rank < proposals; ++rank) {
-            size_t best = SIZE_MAX;
-            float best_score = -FLT_MAX;
-            for (size_t flat = 0; flat < classes * spatial; ++flat) {
-                int used = 0;
-                for (size_t prior = 0; prior < rank; ++prior) {
-                    size_t prior_flat = (size_t)top_classes[batch * proposals + prior] * spatial +
-                                        (size_t)top_indices[batch * proposals + prior];
-                    used |= prior_flat == flat;
-                }
-                float value = suppressed[batch * classes * spatial + flat];
-                if (!used && (best == SIZE_MAX || value > best_score)) {
-                    best = flat;
-                    best_score = value;
-                }
-            }
-            top_scores[batch * proposals + rank] = best_score;
-            top_classes[batch * proposals + rank] = (int64_t)(best / spatial);
-            top_indices[batch * proposals + rank] = (int64_t)(best % spatial);
+            top_scores[batch * proposals + rank] = heap[rank].score;
+            top_classes[batch * proposals + rank] =
+                (int64_t)(heap[rank].flat / spatial);
+            top_indices[batch * proposals + rank] =
+                (int64_t)(heap[rank].flat % spatial);
         }
     }
     return 1;

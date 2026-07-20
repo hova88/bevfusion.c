@@ -2,6 +2,7 @@
 """Prepare a deterministic OpenPCDet BEVFusion BFI from nuScenes."""
 
 import argparse
+import os
 from pathlib import Path
 
 import numpy as np
@@ -93,9 +94,11 @@ def load_cameras(nusc: NuScenes, sample: dict) -> tuple[np.ndarray, ...]:
 
 
 def main() -> None:
+    default_root = Path(os.environ.get(
+        "NUSCENES_ROOT", Path.home() / "datasets" / "nuscenes"))
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output_bfi", type=Path)
-    parser.add_argument("--root", type=Path, default=Path("/data/nuscenes"))
+    parser.add_argument("--root", type=Path, default=default_root)
     parser.add_argument("--version", default="v1.0-mini")
     parser.add_argument("--index", type=int, default=0)
     parser.add_argument("--token")

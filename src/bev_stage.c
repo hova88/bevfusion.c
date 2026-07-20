@@ -144,14 +144,14 @@ static int conv(const float *input, const float *weight, const float *bias,
                 size_t stride, size_t padding) {
     bf_conv2d_desc desc = {1, ci, height, width, co, 3, 3,
                            stride, stride, padding, padding, 1, 1, 1};
-    return bf_conv2d_f32_ref(input, weight, bias, output, &desc);
+    return bf_conv2d_f32(input, weight, bias, output, &desc);
 }
 
 static void bn_relu(float *values, const bf_bound_bn *bn,
                     size_t channels, size_t height, size_t width) {
-    bf_batch_norm_2d_f32_ref(values, bn->scale, bn->bias, bn->mean, bn->variance,
+    bf_batch_norm_2d_f32(values, bn->scale, bn->bias, bn->mean, bn->variance,
                              1e-3f, values, 1, channels, height, width);
-    bf_relu_f32_ref(values, values, channels * height * width);
+    bf_relu_f32(values, values, channels * height * width);
 }
 
 int bf_bev_stage_forward_ref(const bf_bev_stage *stage, const float *input,
@@ -187,7 +187,7 @@ int bf_bev_stage_forward_ref(const bf_bev_stage *stage, const float *input,
         }
         bf_conv2d_desc up0_desc = {1, 128, height, width, 256, 1, 1,
                                    1, 1, 0, 0, 1, 1, 1};
-        if (!bf_conv2d_f32_ref(current, stage->deblock_weight[0], NULL,
+        if (!bf_conv2d_f32(current, stage->deblock_weight[0], NULL,
                                batch_spatial, &up0_desc))
             return fail(error, cap, "BEV deblock 0 failed");
         bn_relu(batch_spatial, &stage->deblock_bn[0], 256, height, width);

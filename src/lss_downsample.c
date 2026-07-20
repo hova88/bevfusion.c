@@ -102,16 +102,16 @@ size_t bf_lss_downsample_workspace_bytes(size_t height, size_t width) {
 
 static void bn_relu(float *values, const bf_bound_bn *bn,
                     size_t height, size_t width) {
-    bf_batch_norm_2d_f32_ref(values, bn->scale, bn->bias, bn->mean,
+    bf_batch_norm_2d_f32(values, bn->scale, bn->bias, bn->mean,
                              bn->variance, 1e-5f, values, 1, 80, height, width);
-    bf_relu_f32_ref(values, values, 80 * height * width);
+    bf_relu_f32(values, values, 80 * height * width);
 }
 
 static int conv(const float *input, const float *weight, float *output,
                 size_t height, size_t width, size_t stride) {
     bf_conv2d_desc desc = {1, 80, height, width, 80, 3, 3,
                            stride, stride, 1, 1, 1, 1, 1};
-    return bf_conv2d_f32_ref(input, weight, NULL, output, &desc);
+    return bf_conv2d_f32(input, weight, NULL, output, &desc);
 }
 
 int bf_lss_downsample_forward_ref(const bf_lss_downsample *down,

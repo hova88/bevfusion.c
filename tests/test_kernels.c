@@ -44,8 +44,8 @@ static int test_conv(const bf_model *model) {
     const bf_tensor *expected = tensor(model, "conv.output");
     float *output = allocate_like(expected);
     bf_conv2d_desc desc = {2, 4, 5, 6, 6, 3, 3, 2, 2, 1, 1, 1, 1, 2};
-    int ok = output && bf_conv2d_f32_ref(input->data, weight->data, bias->data,
-                                         output, &desc) &&
+    int ok = output && bf_conv2d_f32(input->data, weight->data, bias->data,
+                                     output, &desc) &&
              close_array("conv2d", output, expected, 2e-5f, 2e-6f);
     free(output);
     return ok;
@@ -54,9 +54,9 @@ static int test_conv(const bf_model *model) {
 static int test_linear(const bf_model *model) {
     const bf_tensor *expected = tensor(model, "linear.output");
     float *output = allocate_like(expected);
-    bf_linear_f32_ref(tensor(model, "linear.input")->data,
-                      tensor(model, "linear.weight")->data,
-                      tensor(model, "linear.bias")->data, output, 7, 5, 4);
+    bf_linear_f32(tensor(model, "linear.input")->data,
+                  tensor(model, "linear.weight")->data,
+                  tensor(model, "linear.bias")->data, output, 7, 5, 4);
     int ok = output && close_array("linear", output, expected, 4e-6f, 2e-6f);
     free(output);
     return ok;
@@ -67,13 +67,13 @@ static int test_norms(const bf_model *model) {
     const bf_tensor *ln_expected = tensor(model, "layer_norm.output");
     float *bn = allocate_like(bn_expected);
     float *ln = allocate_like(ln_expected);
-    bf_batch_norm_2d_f32_ref(tensor(model, "bn.input")->data,
+    bf_batch_norm_2d_f32(tensor(model, "bn.input")->data,
                              tensor(model, "bn.scale")->data,
                              tensor(model, "bn.bias")->data,
                              tensor(model, "bn.mean")->data,
                              tensor(model, "bn.variance")->data,
                              1e-3f, bn, 2, 3, 4, 5);
-    bf_layer_norm_f32_ref(tensor(model, "layer_norm.input")->data,
+    bf_layer_norm_f32(tensor(model, "layer_norm.input")->data,
                           tensor(model, "layer_norm.scale")->data,
                           tensor(model, "layer_norm.bias")->data,
                           1e-5f, ln, 5, 7);
@@ -93,8 +93,8 @@ static int test_activations(const bf_model *model) {
     float *relu = allocate_like(relu_expected);
     bf_softmax_f32_ref(tensor(model, "softmax.input")->data, softmax, 4, 9);
     const bf_tensor *activation_input = tensor(model, "gelu.input");
-    bf_gelu_f32_ref(activation_input->data, gelu, 65);
-    bf_relu_f32_ref(activation_input->data, relu, 65);
+    bf_gelu_f32(activation_input->data, gelu, 65);
+    bf_relu_f32(activation_input->data, relu, 65);
     int ok = softmax && gelu && relu &&
              close_array("softmax", softmax, softmax_expected, 2e-7f, 2e-6f) &&
              close_array("gelu", gelu, gelu_expected, 3e-7f, 3e-6f) &&

@@ -4,6 +4,7 @@
 #include "bf_depth_head.h"
 #include "bf_depth_raster.h"
 #include "bf_image_fpn.h"
+#include "bf_kernels.h"
 #include "bf_lidar_backbone.h"
 #include "bf_lss.h"
 #include "bf_lss_downsample.h"
@@ -19,6 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define CAMERAS 6u
 #define IMAGE_H 256u
@@ -220,6 +222,21 @@ static void extract_3x3_and_translation(const float *matrices4,
 
 static void debug_bev_stats(const char *name,const float *values,size_t count){double sum=0;float maximum=0;for(size_t i=0;i<count;++i){float value=fabsf(values[i]);sum+=value;if(value>maximum)maximum=value;}fprintf(stderr,"cpu_runtime %s l1=%.9g max=%.9g\n",name,sum,maximum);}
 
+static double wall_milliseconds(void) {
+    struct timespec value;
+    clock_gettime(CLOCK_MONOTONIC, &value);
+    return (double)value.tv_sec * 1000.0 + (double)value.tv_nsec / 1000000.0;
+}
+
+static void profile_stage(int enabled, const char *name,
+                          double start, double *prior) {
+    if (!enabled) return;
+    double now = wall_milliseconds();
+    fprintf(stderr, "cpu_profile %-18s stage=%10.3f ms total=%10.3f ms\n",
+            name, now - *prior, now - start);
+    *prior = now;
+}
+
 int bf_runtime_infer_cpu_ref(const bf_runtime *runtime,
                              const bf_frame_input *frame,
                              size_t point_capacity, size_t voxel_capacity,
@@ -233,6 +250,13 @@ int bf_runtime_infer_cpu_ref(const bf_runtime *runtime,
         !frame->lidar_to_image_6x16 || !detections || !workspace ||
         !required || workspace_bytes < required || frame->point_count > point_capacity)
         return fail(error, cap, "invalid runtime frame, capacity, or workspace");
+    const int profile = getenv("BF_CPU_PROFILE") != NULL;
+    const double profile_start = wall_milliseconds();
+    double profile_prior = profile_start;
+    if (profile)
+        fprintf(stderr, "cpu_profile backend=%s workspace=%.2f MiB points=%zu\n",
+                bf_cpu_kernel_backend(), (double)required / (1024.0 * 1024.0),
+                frame->point_count);
     bf_arena arena = {(unsigned char *)workspace, workspace_bytes, 0, 0, 1};
 #define TAKE_FLOAT(name, count) float *name = arena_take(&arena, (count) * sizeof(float))
 #define TAKE_BYTES(type, name, count) type *name = arena_take(&arena, (count) * sizeof(type))
@@ -263,10 +287,12 @@ int bf_runtime_infer_cpu_ref(const bf_runtime *runtime,
         return fail(error, cap, "runtime voxelization produced no voxels");
     bf_mean_vfe_f32_ref(voxels, voxel_counts, voxel_features,
                         voxel_count, 10, 5);
+    profile_stage(profile, "voxel+vfe", profile_start, &profile_prior);
     if (!bf_lidar_backbone_forward_ref(runtime->lidar, voxel_coords,
             voxel_features, voxel_count, 1, 41, 1440, 1440, sparse_capacity,
             lidar_bev, lidar_workspace,
             bf_lidar_backbone_workspace_bytes(sparse_capacity), error, cap)) return 0;
+    profile_stage(profile, "lidar-backbone", profile_start, &profile_prior);
     arena.used = persistent;
 
     /* Camera phase. Dense point projection is discarded immediately. */
@@ -283,6 +309,7 @@ int bf_runtime_infer_cpu_ref(const bf_runtime *runtime,
             frame->lidar_to_image_6x16, frame->image_augmentation_6x16,
             dense_depth, 1, CAMERAS, IMAGE_H, IMAGE_W))
         return fail(error, cap, "runtime depth rasterization failed");
+    profile_stage(profile, "depth-raster", profile_start, &profile_prior);
     arena.used = dense_depth_mark;
     TAKE_FLOAT(depth_logits, CAMERAS * 118 * 32 * 88);
     TAKE_FLOAT(context, CAMERAS * 80 * 32 * 88);
@@ -297,6 +324,7 @@ int bf_runtime_infer_cpu_ref(const bf_runtime *runtime,
             CAMERAS, IMAGE_H, IMAGE_W, swin0, swin1, swin2,
             swin_workspace, bf_swin_backbone_workspace_bytes(CAMERAS, IMAGE_H, IMAGE_W),
             error, cap)) return 0;
+    profile_stage(profile, "swin", profile_start, &profile_prior);
     TAKE_FLOAT(fpn0, CAMERAS * 256 * 32 * 88);
     TAKE_FLOAT(fpn1, CAMERAS * 256 * 16 * 44);
     void *fpn_workspace = arena_take(&arena, bf_image_fpn_workspace_bytes(32, 88));
@@ -307,6 +335,7 @@ int bf_runtime_infer_cpu_ref(const bf_runtime *runtime,
         !bf_depth_head_forward_ref(runtime->depth, fpn0, dense_depth,
             CAMERAS, 32, 88, depth_logits, context, depth_workspace,
             bf_depth_head_workspace_bytes(32, 88), error, cap)) return 0;
+    profile_stage(profile, "fpn+depth-head", profile_start, &profile_prior);
     arena.used = camera_fixed;
     float camera_rotation[CAMERAS * 9], camera_translation[CAMERAS * 3];
     float intrinsics[CAMERAS * 9], unused_translation[CAMERAS * 3];
@@ -324,16 +353,19 @@ int bf_runtime_infer_cpu_ref(const bf_runtime *runtime,
             camera_translation, intrinsics, post_rotation, post_translation,
             extra_rotation, extra_translation, geometry, 1, CAMERAS, 118, 32, 88))
         return fail(error, cap, "runtime LSS geometry failed");
+    profile_stage(profile, "lss-geometry", profile_start, &profile_prior);
     bf_lss_desc lss = {1, CAMERAS, 118, 32, 88, 80,
         {-54.0f, -54.0f, -10.0f}, {0.3f, 0.3f, 20.0f}, {360, 360, 1}};
     if (!bf_lss_lift_pool_f32_ref(depth_logits, context, geometry,
                                    full_image_bev, &lss))
         return fail(error, cap, "runtime fused lift-splat failed");
+    profile_stage(profile, "lss-lift-pool", profile_start, &profile_prior);
     void *lss_down_workspace = arena_take(&arena,
         bf_lss_downsample_workspace_bytes(BEV_FULL, BEV_FULL));
     if (!arena.ok || !bf_lss_downsample_forward_ref(runtime->lss_down, full_image_bev,
             1, BEV_FULL, BEV_FULL, image_bev, lss_down_workspace,
             bf_lss_downsample_workspace_bytes(BEV_FULL, BEV_FULL), error, cap)) return 0;
+    profile_stage(profile, "lss-downsample", profile_start, &profile_prior);
     arena.used = persistent;
 
     /* Fusion/decoder phase. */
@@ -359,11 +391,13 @@ int bf_runtime_infer_cpu_ref(const bf_runtime *runtime,
     if (!bf_bev_stage_forward_ref(runtime->bev, fusion, 1, BEV, BEV,
             spatial, shared, dense_heatmap, bev_workspace,
             bf_bev_stage_workspace_bytes(BEV, BEV), error, cap)) return 0;
+    profile_stage(profile, "bev-stage", profile_start, &profile_prior);
     bf_transfusion_raw_outputs raw = {center, height_out, dimension, rotation,
         velocity, query_heatmap, query_scores, query_labels, query_indices};
     if (!bf_transfusion_decoder_forward_ref(runtime->decoder, shared, dense_heatmap,
             1, BEV, BEV, 200, &raw, decoder_workspace,
             bf_transfusion_decoder_workspace_bytes(BEV, BEV, 200), error, cap)) return 0;
+    profile_stage(profile, "transfusion", profile_start, &profile_prior);
     const float voxel_xy[2] = {0.075f, 0.075f}, minimum_xy[2] = {-54.0f, -54.0f};
     const float range[6] = {-61.2f, -61.2f, -10.0f, 61.2f, 61.2f, 10.0f};
     if (!bf_transfusion_decode_raw_f32_ref(query_heatmap, query_scores,
@@ -373,5 +407,6 @@ int bf_runtime_infer_cpu_ref(const bf_runtime *runtime,
         !bf_transfusion_filter_detections(boxes, scores_out, labels_out,
             1, 200, 0.0f, range, detections))
         return fail(error, cap, "runtime canonical decode failed");
+    profile_stage(profile, "decode", profile_start, &profile_prior);
     return 1;
 }

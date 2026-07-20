@@ -9,10 +9,28 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+#if defined(BF_WITH_OPENMP)
+#include <omp.h>
+#endif
 
 #define C BF_TRANSFUSION_CHANNELS
 #define HEADS 8u
 #define HEAD_C (C / HEADS)
+#define SCORE_SLOTS 16u
+
+static double profile_now_ms(void) {
+    struct timespec value;
+    clock_gettime(CLOCK_MONOTONIC, &value);
+    return (double)value.tv_sec * 1000.0 + (double)value.tv_nsec * 1e-6;
+}
+
+static int profile_enabled(void) {
+    const char *value = getenv("BF_CPU_PROFILE");
+    return value && value[0] && strcmp(value, "0") != 0;
+}
 
 typedef struct {
     const float *scale, *bias, *mean, *variance;
@@ -194,7 +212,7 @@ size_t bf_transfusion_decoder_workspace_bytes(size_t height, size_t width,
     size_t keys, key_floats, proposal_floats, floats, bytes;
     if (!height || !width || !proposals || proposals > 200 ||
         !checked_mul(height, width, &keys) || proposals > 10 * keys ||
-        !checked_mul(keys, 3 * C + 11, &key_floats) ||
+        !checked_mul(keys, 3 * C + 10 + SCORE_SLOTS, &key_floats) ||
         !checked_mul(proposals, 8 * C + 1, &proposal_floats) ||
         key_floats > SIZE_MAX - proposal_floats) return 0;
     floats = key_floats + proposal_floats;
@@ -225,14 +243,14 @@ static void position_embedding(const bf_bound_position *position,
                 position->first_weight[c * 2] * x + position->first_weight[c * 2 + 1] * y;
     }
     bn_relu_rows(hidden, count, C, &position->bn);
-    bf_linear_f32_ref(hidden, position->second_weight, position->second_bias,
+    bf_linear_f32(hidden, position->second_weight, position->second_bias,
                       output, count, C, C);
 }
 
 static void project_slice(const float *input, size_t rows,
                           const float *weight, const float *bias,
                           size_t slice, float *output) {
-    bf_linear_f32_ref(input, weight + slice * C * C, bias + slice * C,
+    bf_linear_f32(input, weight + slice * C * C, bias + slice * C,
                       output, rows, C, C);
 }
 
@@ -241,19 +259,32 @@ static int multihead_attention(const float *query, size_t query_count,
                                const float *in_weight, const float *in_bias,
                                const float *out_weight, const float *out_bias,
                                float *q_projection, float *k_projection,
-                               float *v_projection, float *scores,
+                               float *v_projection, float *score_slots,
                                float *head_output, float *output) {
     if (!query_count || !key_count) return 0;
     project_slice(query, query_count, in_weight, in_bias, 0, q_projection);
     project_slice(key_value, key_count, in_weight, in_bias, 1, k_projection);
     project_slice(key_value, key_count, in_weight, in_bias, 2, v_projection);
     const float scale = 1.0f / sqrtf((float)HEAD_C);
+#if defined(BF_WITH_OPENMP)
+    int attention_threads = omp_get_max_threads();
+    if (attention_threads > (int)SCORE_SLOTS) attention_threads = (int)SCORE_SLOTS;
+#pragma omp parallel for schedule(static) num_threads(attention_threads)
+#endif
     for (size_t q = 0; q < query_count; ++q) {
+        size_t slot = 0;
+#if defined(BF_WITH_OPENMP)
+        slot = (size_t)omp_get_thread_num();
+#endif
+        float *scores = score_slots + slot * key_count;
         for (size_t c = 0; c < C; ++c) head_output[q * C + c] = 0.0f;
         for (size_t head = 0; head < HEADS; ++head) {
             float maximum = -FLT_MAX;
             for (size_t k = 0; k < key_count; ++k) {
                 float score = 0.0f;
+#if defined(BF_WITH_OPENMP)
+#pragma omp simd reduction(+:score)
+#endif
                 for (size_t lane = 0; lane < HEAD_C; ++lane) {
                     size_t c = head * HEAD_C + lane;
                     score += q_projection[q * C + c] * k_projection[k * C + c];
@@ -277,19 +308,19 @@ static int multihead_attention(const float *query, size_t query_count,
             }
         }
     }
-    bf_linear_f32_ref(head_output, out_weight, out_bias, output,
+    bf_linear_f32(head_output, out_weight, out_bias, output,
                       query_count, C, C);
     return 1;
 }
 
 static void prediction_head(const bf_bound_head *head, const float *query,
                             size_t proposals, float *hidden, float *channel_major) {
-    bf_linear_f32_ref(query, head->hidden_weight, NULL, hidden,
+    bf_linear_f32(query, head->hidden_weight, NULL, hidden,
                       proposals, C, 64);
     bn_relu_rows(hidden, proposals, 64, &head->bn);
     /* Write row-major to the tail of hidden, then transpose to OpenPCDet [C,P]. */
     float *rows = hidden + proposals * 64;
-    bf_linear_f32_ref(hidden, head->output_weight, head->output_bias, rows,
+    bf_linear_f32(hidden, head->output_weight, head->output_bias, rows,
                       proposals, 64, head->output_channels);
     for (size_t p = 0; p < proposals; ++p)
         for (size_t c = 0; c < head->output_channels; ++c)
@@ -315,7 +346,7 @@ int bf_transfusion_decoder_forward_ref(
     float *key_projection = cursor; cursor += keys * C;
     float *value_projection = cursor; cursor += keys * C;
     float *suppressed = cursor; cursor += keys * 10;
-    float *scores = cursor; cursor += keys;
+    float *scores = cursor; cursor += keys * SCORE_SLOTS;
     float *query = cursor; cursor += proposals * C;
     float *query_position = cursor; cursor += proposals * C;
     float *temporary = cursor; cursor += proposals * C;
@@ -324,7 +355,11 @@ int bf_transfusion_decoder_forward_ref(
     float *ffn = cursor; cursor += proposals * 256;
     float *head_hidden = cursor; cursor += proposals * 128;
     float *top_scores = cursor; cursor += proposals;
+    const int profile = profile_enabled();
+    double proposal_ms = 0.0, position_ms = 0.0, self_ms = 0.0;
+    double cross_ms = 0.0, ffn_ms = 0.0, heads_ms = 0.0;
     for (size_t b = 0; b < batches; ++b) {
+        double mark = profile ? profile_now_ms() : 0.0;
         const float *batch_shared = shared + b * C * keys;
         const float *batch_heatmap = dense_heatmap + b * 10 * keys;
         int64_t *labels = out->query_labels_bp + b * proposals;
@@ -339,6 +374,9 @@ int bf_transfusion_decoder_forward_ref(
                 query[p * C + c] = batch_shared[c * keys + index] +
                     net->class_bias[c] + net->class_weight[c * 10 + class_id];
         }
+        if (profile) {
+            double now = profile_now_ms(); proposal_ms += now - mark; mark = now;
+        }
         position_embedding(&net->self_position, indices, proposals, width,
                            temporary, query_position);
         position_embedding(&net->cross_position, NULL, keys, width,
@@ -346,6 +384,9 @@ int bf_transfusion_decoder_forward_ref(
         for (size_t k = 0; k < keys; ++k)
             for (size_t c = 0; c < C; ++c)
                 key_value[k * C + c] += batch_shared[c * keys + k];
+        if (profile) {
+            double now = profile_now_ms(); position_ms += now - mark; mark = now;
+        }
         for (size_t i = 0; i < proposals * C; ++i) temporary[i] = query[i] + query_position[i];
         if (!multihead_attention(temporary, proposals, temporary, proposals,
                 net->self_in_weight, net->self_in_bias,
@@ -353,8 +394,11 @@ int bf_transfusion_decoder_forward_ref(
                 query_projection, key_projection, value_projection, scores,
                 attention, temporary)) return fail(error, cap, "TransFusion self attention failed");
         for (size_t i = 0; i < proposals * C; ++i) query[i] += temporary[i];
-        bf_layer_norm_f32_ref(query, net->norm_scale[0], net->norm_bias[0],
+        bf_layer_norm_f32(query, net->norm_scale[0], net->norm_bias[0],
                               1e-5f, query, proposals, C);
+        if (profile) {
+            double now = profile_now_ms(); self_ms += now - mark; mark = now;
+        }
         for (size_t i = 0; i < proposals * C; ++i) temporary[i] = query[i] + query_position[i];
         if (!multihead_attention(temporary, proposals, key_value, keys,
                 net->cross_in_weight, net->cross_in_bias,
@@ -362,16 +406,22 @@ int bf_transfusion_decoder_forward_ref(
                 query_projection, key_projection, value_projection, scores,
                 attention, temporary)) return fail(error, cap, "TransFusion cross attention failed");
         for (size_t i = 0; i < proposals * C; ++i) query[i] += temporary[i];
-        bf_layer_norm_f32_ref(query, net->norm_scale[1], net->norm_bias[1],
+        bf_layer_norm_f32(query, net->norm_scale[1], net->norm_bias[1],
                               1e-5f, query, proposals, C);
-        bf_linear_f32_ref(query, net->linear1_weight, net->linear1_bias,
+        if (profile) {
+            double now = profile_now_ms(); cross_ms += now - mark; mark = now;
+        }
+        bf_linear_f32(query, net->linear1_weight, net->linear1_bias,
                           ffn, proposals, C, 256);
-        bf_relu_f32_ref(ffn, ffn, proposals * 256);
-        bf_linear_f32_ref(ffn, net->linear2_weight, net->linear2_bias,
+        bf_relu_f32(ffn, ffn, proposals * 256);
+        bf_linear_f32(ffn, net->linear2_weight, net->linear2_bias,
                           temporary, proposals, 256, C);
         for (size_t i = 0; i < proposals * C; ++i) query[i] += temporary[i];
-        bf_layer_norm_f32_ref(query, net->norm_scale[2], net->norm_bias[2],
+        bf_layer_norm_f32(query, net->norm_scale[2], net->norm_bias[2],
                               1e-5f, query, proposals, C);
+        if (profile) {
+            double now = profile_now_ms(); ffn_ms += now - mark; mark = now;
+        }
         float *head_outputs[6] = {
             out->center_b2p + b * 2 * proposals,
             out->height_b1p + b * proposals,
@@ -393,6 +443,12 @@ int bf_transfusion_decoder_forward_ref(
                 out->query_heatmap_scores_b10p[(b * 10 + c) * proposals + p] =
                     suppressed[c * keys + index];
         }
+        if (profile) heads_ms += profile_now_ms() - mark;
     }
+    if (profile)
+        fprintf(stderr,
+                "cpu_profile transfusion.detail proposal=%8.3f position=%8.3f "
+                "self=%8.3f cross=%8.3f ffn=%8.3f heads=%8.3f ms\n",
+                proposal_ms, position_ms, self_ms, cross_ms, ffn_ms, heads_ms);
     return 1;
 }

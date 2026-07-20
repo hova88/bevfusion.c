@@ -1,4 +1,5 @@
 #include "bf_swin.h"
+#include "bf_kernels.h"
 
 #include <float.h>
 #include <math.h>
@@ -23,14 +24,8 @@ static int attention_core(const float *windows, const float *qkv_weight,
     int ok = 1;
     for (size_t window = 0; window < total_windows && ok; ++window) {
         const float *input = windows + window * tokens * channels;
-        for (size_t token = 0; token < tokens; ++token)
-            for (size_t out_channel = 0; out_channel < 3 * channels; ++out_channel) {
-                float sum = qkv_bias[out_channel];
-                for (size_t in_channel = 0; in_channel < channels; ++in_channel)
-                    sum += input[token * channels + in_channel] *
-                           qkv_weight[out_channel * channels + in_channel];
-                qkv[token * 3 * channels + out_channel] = sum;
-            }
+        bf_linear_f32(input, qkv_weight, qkv_bias, qkv,
+                      tokens, channels, 3 * channels);
         memset(projected, 0, tokens * channels * sizeof(*projected));
         for (size_t head = 0; head < heads && ok; ++head)
             for (size_t query = 0; query < tokens; ++query) {
@@ -41,6 +36,9 @@ static int attention_core(const float *windows, const float *qkv_weight,
                         ok = 0; break;
                     }
                     float score = relative_bias[(size_t)bias_row * heads + head];
+#if defined(BF_WITH_OPENMP)
+#pragma omp simd reduction(+:score)
+#endif
                     for (size_t lane = 0; lane < head_channels; ++lane) {
                         size_t channel = head * head_channels + lane;
                         score += qkv[query * 3 * channels + channel] * scale *
@@ -67,14 +65,10 @@ static int attention_core(const float *windows, const float *qkv_weight,
                     }
                 }
             }
-        for (size_t token = 0; token < tokens && ok; ++token)
-            for (size_t out_channel = 0; out_channel < channels; ++out_channel) {
-                float sum = projection_bias[out_channel];
-                for (size_t in_channel = 0; in_channel < channels; ++in_channel)
-                    sum += projected[token * channels + in_channel] *
-                           projection_weight[out_channel * channels + in_channel];
-                output[(window * tokens + token) * channels + out_channel] = sum;
-            }
+        if (ok)
+            bf_linear_f32(projected, projection_weight, projection_bias,
+                          output + window * tokens * channels,
+                          tokens, channels, channels);
     }
     return ok;
 }
