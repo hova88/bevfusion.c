@@ -5309,7 +5309,7 @@
     {
       "name": "dense_head.decoder.self_attn.out_proj",
       "stage": "head",
-      "operator": "MultiheadAttention",
+      "operator": "Linear",
       "tensor_shapes": [
         [
           128,
@@ -5332,7 +5332,7 @@
     {
       "name": "dense_head.decoder.multihead_attn",
       "stage": "head",
-      "operator": "Linear",
+      "operator": "MultiheadAttention",
       "tensor_shapes": [
         [
           384,

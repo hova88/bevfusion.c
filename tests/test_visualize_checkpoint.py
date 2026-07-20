@@ -28,7 +28,8 @@ class VisualizerTest(unittest.TestCase):
             self.record("neck.block.1.bias", (256,)),
             self.record("neck.block.1.running_mean", (256,)),
             self.record("neck.block.1.running_var", (256,)),
-            self.record("dense_head.decoder.cross_attn.in_proj_weight", (384, 128)),
+            self.record("dense_head.decoder.multihead_attn.in_proj_weight", (384, 128)),
+            self.record("dense_head.decoder.multihead_attn.out_proj.weight", (128, 128)),
         ]
         grouped: dict[str, list[visualizer.TensorRecord]] = {}
         for record in records:
@@ -36,8 +37,9 @@ class VisualizerTest(unittest.TestCase):
         self.assertEqual(visualizer.infer_operator("backbone_3d.conv", grouped["backbone_3d.conv"]), "SparseConv3d")
         self.assertEqual(visualizer.infer_operator("neck.block.0", grouped["neck.block.0"]), "Conv2d")
         self.assertEqual(visualizer.infer_operator("neck.block.1", grouped["neck.block.1"]), "BatchNorm")
-        self.assertEqual(visualizer.infer_operator("dense_head.decoder.cross_attn", grouped["dense_head.decoder.cross_attn"]), "MultiheadAttention")
-        self.assertEqual(visualizer.stage_for("dense_head.decoder.cross_attn"), "head")
+        self.assertEqual(visualizer.infer_operator("dense_head.decoder.multihead_attn", grouped["dense_head.decoder.multihead_attn"]), "MultiheadAttention")
+        self.assertEqual(visualizer.infer_operator("dense_head.decoder.multihead_attn.out_proj", grouped["dense_head.decoder.multihead_attn.out_proj"]), "Linear")
+        self.assertEqual(visualizer.stage_for("dense_head.decoder.multihead_attn"), "head")
 
     def test_writes_deterministic_machine_and_human_views(self) -> None:
         records = [self.record("fuser.conv.0.weight", (256, 336, 3, 3))]
