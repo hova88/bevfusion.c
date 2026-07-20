@@ -272,8 +272,8 @@ checkpoint tensors—not inferred activation shapes.
 | 212 | Detection · TransFusion | `dense_head.heatmap_head.1` | Conv2d | `[10, 128, 3, 3] · [10]` | 11,530 |
 | 213 | Detection · TransFusion | `dense_head.class_encoding` | Conv1d | `[128, 10, 1] · [128]` | 1,408 |
 | 214 | Detection · TransFusion | `dense_head.decoder.self_attn` | MultiheadAttention | `[384, 128] · [384]` | 49,536 |
-| 215 | Detection · TransFusion | `dense_head.decoder.self_attn.out_proj` | MultiheadAttention | `[128, 128] · [128]` | 16,512 |
-| 216 | Detection · TransFusion | `dense_head.decoder.multihead_attn` | Linear | `[384, 128] · [384]` | 49,536 |
+| 215 | Detection · TransFusion | `dense_head.decoder.self_attn.out_proj` | Linear | `[128, 128] · [128]` | 16,512 |
+| 216 | Detection · TransFusion | `dense_head.decoder.multihead_attn` | MultiheadAttention | `[384, 128] · [384]` | 49,536 |
 | 217 | Detection · TransFusion | `dense_head.decoder.multihead_attn.out_proj` | Linear | `[128, 128] · [128]` | 16,512 |
 | 218 | Detection · TransFusion | `dense_head.decoder.linear1` | Linear | `[256, 128] · [256]` | 33,024 |
 | 219 | Detection · TransFusion | `dense_head.decoder.linear2` | Linear | `[128, 256] · [128]` | 32,896 |

@@ -113,7 +113,7 @@ def infer_operator(name: str, tensors: list[TensorRecord]) -> str:
     if rank == 3:
         return "Conv1d"
     if rank == 2:
-        if any(token in lowered for token in ("self_attn", "cross_attn")):
+        if lowered.endswith(("self_attn", "cross_attn", "multihead_attn")):
             return "MultiheadAttention"
         return "Linear"
     if rank == 1 and any(token in lowered for token in ("norm", ".ln", ".bn")):
