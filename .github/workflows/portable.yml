@@ -1,0 +1,24 @@
+name: portable-cpu
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  c11:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Configure portable CPU build
+        run: cmake --preset cpu-release
+      - name: Compile
+        run: cmake --build --preset cpu-release --parallel 2
+      - name: Run dependency-free tests
+        run: ctest --preset cpu-release

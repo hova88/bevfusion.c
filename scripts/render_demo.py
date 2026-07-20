@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Render real /data/nuscenes inference through the C TUI into the README GIF."""
+"""Render real nuScenes inference through the C TUI into the README GIF."""
 
 from __future__ import annotations
 
 import re
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -81,6 +82,14 @@ def blend(foreground, background, amount: float):
                  for i in range(3))
 
 
+def find_font(candidates: list[str], size: int):
+    override = os.environ.get("BEVFUSION_FONT")
+    for candidate in ([override] if override else []) + candidates:
+        if candidate and Path(candidate).exists():
+            return ImageFont.truetype(candidate, size)
+    return ImageFont.load_default()
+
+
 def render_frame(data: bytes, columns: int, rows: int, font, braille_font):
     text = data.decode("utf-8")
     cells = terminal_cells(text, columns, rows)
@@ -106,12 +115,14 @@ def render_frame(data: bytes, columns: int, rows: int, font, braille_font):
 
 def main() -> int:
     root = Path(__file__).resolve().parents[1]
+    data_root = Path(os.environ.get(
+        "NUSCENES_ROOT", Path.home() / "datasets" / "nuscenes"))
     binary = Path(sys.argv[1]) if len(sys.argv) > 1 else root / "build/bevfusion_cuda"
     output = Path(sys.argv[2]) if len(sys.argv) > 2 else root / "docs/bevfusion-demo.gif"
-    model = Path(sys.argv[3]) if len(sys.argv) > 3 else Path(
-        "/data/nuscenes/bevfusion-demo/bevfusion.bfw")
-    demo_dir = Path(sys.argv[4]) if len(sys.argv) > 4 else Path(
-        "/data/nuscenes/bevfusion-demo")
+    demo_dir = (Path(sys.argv[4]) if len(sys.argv) > 4 else
+                data_root / "bevfusion-demo")
+    model = (Path(sys.argv[3]) if len(sys.argv) > 3 else
+             demo_dir / "bevfusion.bfw")
     if not binary.exists():
         raise SystemExit(f"missing {binary}; run make")
     if not model.exists():
@@ -119,8 +130,15 @@ def main() -> int:
     paths = sorted(demo_dir.glob("frame-*.bfi"))
     if not paths:
         raise SystemExit(f"no demo frames under {demo_dir}; run make demo-data")
-    font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 16)
-    braille_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16)
+    font = find_font([
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+        "/System/Library/Fonts/Menlo.ttc",
+    ], 16)
+    braille_font = find_font([
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/System/Library/Fonts/Apple Symbols.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+    ], 16)
     columns, rows = 100, 30
     frames = []
     for index, path in enumerate(paths):

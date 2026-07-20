@@ -1,10 +1,39 @@
 #include "bf_kernels.h"
 
 #include <float.h>
+#include <limits.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+
+#if defined(BF_WITH_ACCELERATE)
+#include <Accelerate/Accelerate.h>
+#elif defined(BF_WITH_CBLAS)
+#include <cblas.h>
+#endif
+
+static int force_scalar(void) {
+    const char *value = getenv("BF_CPU_SCALAR");
+    return value && value[0] && strcmp(value, "0") != 0;
+}
+
+const char *bf_cpu_kernel_backend(void) {
+    if (force_scalar()) return "scalar-forced";
+#if defined(BF_WITH_ACCELERATE) && defined(BF_WITH_OPENMP)
+    return "accelerate+openmp";
+#elif defined(BF_WITH_ACCELERATE)
+    return "accelerate";
+#elif defined(BF_WITH_CBLAS) && defined(BF_WITH_OPENMP)
+    return "cblas+openmp";
+#elif defined(BF_WITH_CBLAS)
+    return "cblas";
+#elif defined(BF_WITH_OPENMP)
+    return "openmp";
+#else
+    return "scalar";
+#endif
+}
 
 int bf_conv2d_output_shape(const bf_conv2d_desc *d,
                            size_t *out_height, size_t *out_width) {
@@ -70,6 +99,116 @@ int bf_conv2d_f32_ref(const float *input, const float *weight,
         }
     }
     return 1;
+}
+
+static void valid_output_range(size_t outputs, size_t input, size_t stride,
+                               size_t pad, size_t kernel_offset,
+                               size_t *begin, size_t *end) {
+    size_t first = 0;
+    if (kernel_offset < pad) {
+        size_t delta = pad - kernel_offset;
+        first = delta / stride + (delta % stride != 0);
+    }
+    size_t limit = pad + input;
+    size_t last = 0;
+    if (kernel_offset < limit) {
+        size_t delta = limit - kernel_offset;
+        last = delta / stride + (delta % stride != 0);
+    }
+    *begin = first < outputs ? first : outputs;
+    *end = last < outputs ? last : outputs;
+    if (*end < *begin) *end = *begin;
+}
+
+/* Spatial sweep is the better fallback for patch embedding, strided kernels,
+ * and small feature maps: it amortizes setup across the complete output plane. */
+static int conv2d_spatial_sweep(const float *restrict input,
+                                const float *restrict weight,
+                                const float *bias, float *restrict output,
+                                const bf_conv2d_desc *d,
+                                size_t oh, size_t ow) {
+    const size_t ci_group = d->in_channels / d->groups;
+    const size_t co_group = d->out_channels / d->groups;
+    const size_t tasks = d->n * d->out_channels;
+#if defined(BF_WITH_OPENMP)
+#pragma omp parallel for schedule(static)
+#endif
+    for (size_t task = 0; task < tasks; ++task) {
+        const size_t n = task / d->out_channels;
+        const size_t co = task % d->out_channels;
+        const size_t group = co / co_group;
+        const size_t ci_begin = group * ci_group;
+        float *destination = output + (n * d->out_channels + co) * oh * ow;
+        const float initial = bias ? bias[co] : 0.0f;
+        for (size_t i = 0; i < oh * ow; ++i) destination[i] = initial;
+        for (size_t ci_local = 0; ci_local < ci_group; ++ci_local) {
+            const size_t ci = ci_begin + ci_local;
+            const float *source = input + (n * d->in_channels + ci) *
+                                  d->in_height * d->in_width;
+            for (size_t ky = 0; ky < d->kernel_height; ++ky) {
+                size_t y_begin, y_end;
+                const size_t y_offset = ky * d->dilation_height;
+                valid_output_range(oh, d->in_height, d->stride_height,
+                                   d->pad_height, y_offset, &y_begin, &y_end);
+                for (size_t kx = 0; kx < d->kernel_width; ++kx) {
+                    const float coefficient = weight[((co * ci_group + ci_local) *
+                        d->kernel_height + ky) * d->kernel_width + kx];
+                    size_t x_begin, x_end;
+                    const size_t x_offset = kx * d->dilation_width;
+                    valid_output_range(ow, d->in_width, d->stride_width,
+                                       d->pad_width, x_offset, &x_begin, &x_end);
+                    for (size_t y = y_begin; y < y_end; ++y) {
+                        const size_t iy = y * d->stride_height + y_offset -
+                                          d->pad_height;
+                        const float *in_row = source + iy * d->in_width;
+                        float *out_row = destination + y * ow;
+#if defined(BF_WITH_OPENMP)
+#pragma omp simd
+#endif
+                        for (size_t x = x_begin; x < x_end; ++x) {
+                            const size_t ix = x * d->stride_width + x_offset -
+                                              d->pad_width;
+                            out_row[x] += in_row[ix] * coefficient;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return 1;
+}
+
+int bf_conv2d_f32(const float *restrict input,
+                  const float *restrict weight,
+                  const float *bias, float *restrict output,
+                  const bf_conv2d_desc *d) {
+    size_t oh, ow;
+    if (!input || !weight || !output ||
+        !bf_conv2d_output_shape(d, &oh, &ow)) return 0;
+    if (force_scalar()) return bf_conv2d_f32_ref(input, weight, bias, output, d);
+#if defined(BF_WITH_ACCELERATE) || defined(BF_WITH_CBLAS)
+    if (d->kernel_height == 1 && d->kernel_width == 1 &&
+        d->stride_height == 1 && d->stride_width == 1 &&
+        d->pad_height == 0 && d->pad_width == 0 && d->groups == 1 &&
+        d->n <= INT_MAX && d->out_channels <= INT_MAX &&
+        d->in_channels <= INT_MAX && oh <= SIZE_MAX / ow && oh * ow <= INT_MAX) {
+        const size_t spatial = oh * ow;
+        for (size_t n = 0; n < d->n; ++n) {
+            float *destination = output + n * d->out_channels * spatial;
+            cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+                        (int)d->out_channels, (int)spatial, (int)d->in_channels,
+                        1.0f, weight, (int)d->in_channels,
+                        input + n * d->in_channels * spatial, (int)spatial,
+                        0.0f, destination, (int)spatial);
+            if (bias)
+                for (size_t co = 0; co < d->out_channels; ++co)
+                    for (size_t i = 0; i < spatial; ++i)
+                        destination[co * spatial + i] += bias[co];
+        }
+        return 1;
+    }
+#endif
+    return conv2d_spatial_sweep(input, weight, bias, output, d, oh, ow);
 }
 
 static int transpose_axis(size_t input, size_t kernel, size_t stride,
@@ -162,6 +301,43 @@ void bf_linear_f32_ref(const float *input, const float *weight,
         }
 }
 
+void bf_linear_f32(const float *input, const float *weight,
+                   const float *bias, float *output,
+                   size_t rows, size_t in_features, size_t out_features) {
+    if (force_scalar()) {
+        bf_linear_f32_ref(input, weight, bias, output, rows, in_features, out_features);
+        return;
+    }
+#if defined(BF_WITH_ACCELERATE) || defined(BF_WITH_CBLAS)
+    if (rows <= INT_MAX && in_features <= INT_MAX && out_features <= INT_MAX) {
+        cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                    (int)rows, (int)out_features, (int)in_features,
+                    1.0f, input, (int)in_features, weight, (int)in_features,
+                    0.0f, output, (int)out_features);
+        if (bias)
+            for (size_t row = 0; row < rows; ++row)
+                for (size_t out = 0; out < out_features; ++out)
+                    output[row * out_features + out] += bias[out];
+        return;
+    }
+#endif
+#if defined(BF_WITH_OPENMP)
+    const size_t tasks = rows * out_features;
+#pragma omp parallel for schedule(static)
+    for (size_t task = 0; task < tasks; ++task) {
+        const size_t row = task / out_features;
+        const size_t out = task % out_features;
+        float sum = bias ? bias[out] : 0.0f;
+#pragma omp simd reduction(+:sum)
+        for (size_t in = 0; in < in_features; ++in)
+            sum += input[row * in_features + in] * weight[out * in_features + in];
+        output[row * out_features + out] = sum;
+    }
+#else
+    bf_linear_f32_ref(input, weight, bias, output, rows, in_features, out_features);
+#endif
+}
+
 void bf_batch_norm_2d_f32_ref(const float *input, const float *scale,
                               const float *bias, const float *mean,
                               const float *variance, float epsilon,
@@ -176,6 +352,31 @@ void bf_batch_norm_2d_f32_ref(const float *input, const float *scale,
             for (size_t i = 0; i < spatial; ++i)
                 output[base + i] = input[base + i] * factor + offset;
         }
+}
+
+void bf_batch_norm_2d_f32(const float *input, const float *scale,
+                          const float *bias, const float *mean,
+                          const float *variance, float epsilon,
+                          float *output, size_t n, size_t channels,
+                          size_t height, size_t width) {
+    if (force_scalar()) {
+        bf_batch_norm_2d_f32_ref(input, scale, bias, mean, variance, epsilon,
+                                 output, n, channels, height, width);
+        return;
+    }
+    const size_t spatial = height * width;
+    const size_t tasks = n * channels;
+#if defined(BF_WITH_OPENMP)
+#pragma omp parallel for schedule(static) if(tasks * spatial >= 4096)
+#endif
+    for (size_t task = 0; task < tasks; ++task) {
+        const size_t channel = task % channels;
+        const float factor = scale[channel] / sqrtf(variance[channel] + epsilon);
+        const float offset = bias[channel] - mean[channel] * factor;
+        const size_t base = task * spatial;
+        for (size_t i = 0; i < spatial; ++i)
+            output[base + i] = input[base + i] * factor + offset;
+    }
 }
 
 void bf_layer_norm_f32_ref(const float *input, const float *scale,
@@ -195,6 +396,34 @@ void bf_layer_norm_f32_ref(const float *input, const float *scale,
         float inverse_std = 1.0f / sqrtf((float)(square_sum / (double)channels) + epsilon);
         for (size_t i = 0; i < channels; ++i)
             destination[i] = (source[i] - mean) * inverse_std * scale[i] + bias[i];
+    }
+}
+
+void bf_layer_norm_f32(const float *input, const float *scale,
+                       const float *bias, float epsilon, float *output,
+                       size_t rows, size_t channels) {
+    if (force_scalar()) {
+        bf_layer_norm_f32_ref(input, scale, bias, epsilon, output, rows, channels);
+        return;
+    }
+#if defined(BF_WITH_OPENMP)
+#pragma omp parallel for schedule(static) if(rows * channels >= 4096)
+#endif
+    for (size_t row = 0; row < rows; ++row) {
+        const float *source = input + row * channels;
+        float *destination = output + row * channels;
+        double sum = 0.0;
+        for (size_t i = 0; i < channels; ++i) sum += source[i];
+        const float mean_value = (float)(sum / (double)channels);
+        double square_sum = 0.0;
+        for (size_t i = 0; i < channels; ++i) {
+            const double centered = (double)source[i] - mean_value;
+            square_sum += centered * centered;
+        }
+        const float inverse_std = 1.0f /
+            sqrtf((float)(square_sum / (double)channels) + epsilon);
+        for (size_t i = 0; i < channels; ++i)
+            destination[i] = (source[i] - mean_value) * inverse_std * scale[i] + bias[i];
     }
 }
 
@@ -222,8 +451,27 @@ void bf_gelu_f32_ref(const float *input, float *output, size_t count) {
         output[i] = 0.5f * input[i] * (1.0f + erff(input[i] * inverse_sqrt_two));
 }
 
+void bf_gelu_f32(const float *input, float *output, size_t count) {
+    if (force_scalar()) { bf_gelu_f32_ref(input, output, count); return; }
+    const float inverse_sqrt_two = 0.7071067811865475244f;
+#if defined(BF_WITH_OPENMP)
+#pragma omp parallel for schedule(static) if(count >= 4096)
+#endif
+    for (size_t i = 0; i < count; ++i)
+        output[i] = 0.5f * input[i] * (1.0f + erff(input[i] * inverse_sqrt_two));
+}
+
 void bf_relu_f32_ref(const float *input, float *output, size_t count) {
     for (size_t i = 0; i < count; ++i) output[i] = input[i] > 0.0f ? input[i] : 0.0f;
+}
+
+void bf_relu_f32(const float *input, float *output, size_t count) {
+    if (force_scalar()) { bf_relu_f32_ref(input, output, count); return; }
+#if defined(BF_WITH_OPENMP)
+#pragma omp parallel for schedule(static) if(count >= 4096)
+#endif
+    for (size_t i = 0; i < count; ++i)
+        output[i] = input[i] > 0.0f ? input[i] : 0.0f;
 }
 
 void bf_mean_vfe_f32_ref(const float *points, const int64_t *counts,
@@ -455,38 +703,54 @@ int bf_sparse_conv3d_f32_workspace_ref(const bf_coord4 *input_coords,
                     }
     }
     if (ok) qsort(output_coords, count, sizeof(*output_coords), coord_compare);
-    for (size_t out_index = 0; out_index < count && ok; ++out_index) {
+    int compute_ok = ok;
+#if defined(BF_WITH_OPENMP)
+#pragma omp parallel for schedule(static) reduction(&:compute_ok)
+#endif
+    for (size_t out_index = 0; out_index < count; ++out_index) {
         bf_coord4 out_coord = output_coords[out_index];
-        for (size_t co = 0; co < d->out_channels; ++co) {
-            float sum = bias ? bias[co] : 0.0f;
-            for (size_t kz = 0; kz < d->kernel_depth; ++kz)
-                for (size_t ky = 0; ky < d->kernel_height; ++ky)
-                    for (size_t kx = 0; kx < d->kernel_width; ++kx) {
-                        int64_t iz = (int64_t)out_coord.z * (int64_t)d->stride_depth -
-                                     (int64_t)d->pad_depth + (int64_t)kz * (int64_t)d->dilation_depth;
-                        int64_t iy = (int64_t)out_coord.y * (int64_t)d->stride_height -
-                                     (int64_t)d->pad_height + (int64_t)ky * (int64_t)d->dilation_height;
-                        int64_t ix = (int64_t)out_coord.x * (int64_t)d->stride_width -
-                                     (int64_t)d->pad_width + (int64_t)kx * (int64_t)d->dilation_width;
-                        if (iz < 0 || iy < 0 || ix < 0 || iz >= (int64_t)d->in_depth ||
-                            iy >= (int64_t)d->in_height || ix >= (int64_t)d->in_width) continue;
-                        bf_coord4 source = {out_coord.batch, (int32_t)iz, (int32_t)iy, (int32_t)ix};
-                        uint64_t key;
-                        if (!coord_key(source, d->batches, d->in_depth, d->in_height, d->in_width, &key)) {
-                            ok = 0;
-                            break;
-                        }
-                        size_t in_index = hash_find(input_hash, input_hash_cap, key);
-                        if (in_index == SIZE_MAX) continue;
-                        for (size_t ci = 0; ci < d->in_channels; ++ci) {
-                            size_t wi = ((((kz * d->kernel_height + ky) * d->kernel_width + kx) *
-                                          d->in_channels + ci) * d->out_channels + co);
-                            sum += input_features[in_index * d->in_channels + ci] * weight[wi];
-                        }
+        float *destination = output_features + out_index * d->out_channels;
+        for (size_t co = 0; co < d->out_channels; ++co)
+            destination[co] = bias ? bias[co] : 0.0f;
+        for (size_t kz = 0; kz < d->kernel_depth; ++kz)
+            for (size_t ky = 0; ky < d->kernel_height; ++ky)
+                for (size_t kx = 0; kx < d->kernel_width; ++kx) {
+                    int64_t iz = (int64_t)out_coord.z * (int64_t)d->stride_depth -
+                                 (int64_t)d->pad_depth + (int64_t)kz * (int64_t)d->dilation_depth;
+                    int64_t iy = (int64_t)out_coord.y * (int64_t)d->stride_height -
+                                 (int64_t)d->pad_height + (int64_t)ky * (int64_t)d->dilation_height;
+                    int64_t ix = (int64_t)out_coord.x * (int64_t)d->stride_width -
+                                 (int64_t)d->pad_width + (int64_t)kx * (int64_t)d->dilation_width;
+                    if (iz < 0 || iy < 0 || ix < 0 || iz >= (int64_t)d->in_depth ||
+                        iy >= (int64_t)d->in_height || ix >= (int64_t)d->in_width) continue;
+                    bf_coord4 source = {out_coord.batch, (int32_t)iz, (int32_t)iy, (int32_t)ix};
+                    uint64_t key;
+                    if (!coord_key(source, d->batches, d->in_depth,
+                                   d->in_height, d->in_width, &key)) {
+                        compute_ok = 0;
+                        continue;
                     }
-            output_features[out_index * d->out_channels + co] = sum;
-        }
+                    size_t in_index = hash_find(input_hash, input_hash_cap, key);
+                    if (in_index == SIZE_MAX) continue;
+                    const size_t kernel_index =
+                        (kz * d->kernel_height + ky) * d->kernel_width + kx;
+                    const float *source_features = input_features +
+                        in_index * d->in_channels;
+                    const float *kernel = weight + kernel_index *
+                        d->in_channels * d->out_channels;
+                    for (size_t co = 0; co < d->out_channels; ++co) {
+                        float sum = destination[co];
+#if defined(BF_WITH_OPENMP)
+#pragma omp simd reduction(+:sum)
+#endif
+                        for (size_t ci = 0; ci < d->in_channels; ++ci)
+                            sum += source_features[ci] *
+                                   kernel[ci * d->out_channels + co];
+                        destination[co] = sum;
+                    }
+                }
     }
+    ok = ok && compute_ok;
     if (!ok) return 0;
     *output_count = count;
     return 1;

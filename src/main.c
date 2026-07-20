@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "bf_frame.h"
+#include "bf_kernels.h"
 #include "bf_model.h"
 #include "bf_runtime.h"
 #include "bf_tui.h"
@@ -305,8 +306,9 @@ int main(int argc, char **argv) {
         !bf_model_validate_all(model, error, sizeof(error))) {
         fprintf(stderr, "bevfusion: %s\n", error); bf_model_close(model); return 1;
     }
-    printf("BFW v%u: %zu tensors, %.2f MiB, all CRCs valid\n",
+    printf("BFW v%u: %zu tensors, %.2f MiB, all CRCs valid; CPU kernels: %s\n",
            BF_MODEL_VERSION, bf_model_tensor_count(model),
-           (double)bf_model_file_bytes(model) / (1024.0 * 1024.0));
+           (double)bf_model_file_bytes(model) / (1024.0 * 1024.0),
+           bf_cpu_kernel_backend());
     bf_model_close(model); return 0;
 }

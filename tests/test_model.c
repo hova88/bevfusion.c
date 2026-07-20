@@ -31,6 +31,11 @@ static int malformed_header_test(void) {
 }
 
 int main(int argc, char **argv) {
+    if (argc == 1) {
+        if (!malformed_header_test()) return 5;
+        puts("model container malformed-header gate passes");
+        return 0;
+    }
     if (argc != 2) return 2;
     char error[256] = "unspecified contract failure";
     bf_model *model = NULL;

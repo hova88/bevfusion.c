@@ -242,7 +242,7 @@ static int run_block(const bf_bound_swin_block *block, float *current,
                      size_t heads, size_t shift,
                      void *attention_workspace, size_t attention_bytes) {
     size_t rows = batches * height * width, count = rows * channels;
-    bf_layer_norm_f32_ref(current, block->norm1_scale, block->norm1_bias,
+    bf_layer_norm_f32(current, block->norm1_scale, block->norm1_bias,
                           1e-5f, normal, rows, channels);
     bf_swin_window_desc desc = {batches, height, width, channels, heads, 7, shift};
     if (!bf_swin_shifted_window_f32_workspace_ref(
@@ -251,12 +251,12 @@ static int run_block(const bf_bound_swin_block *block, float *current,
             block->projection_bias, hidden, &desc,
             attention_workspace, attention_bytes)) return 0;
     for (size_t i = 0; i < count; ++i) current[i] += hidden[i];
-    bf_layer_norm_f32_ref(current, block->norm2_scale, block->norm2_bias,
+    bf_layer_norm_f32(current, block->norm2_scale, block->norm2_bias,
                           1e-5f, normal, rows, channels);
-    bf_linear_f32_ref(normal, block->ffn1_weight, block->ffn1_bias,
+    bf_linear_f32(normal, block->ffn1_weight, block->ffn1_bias,
                       hidden, rows, channels, 4 * channels);
-    bf_gelu_f32_ref(hidden, hidden, rows * 4 * channels);
-    bf_linear_f32_ref(hidden, block->ffn2_weight, block->ffn2_bias,
+    bf_gelu_f32(hidden, hidden, rows * 4 * channels);
+    bf_linear_f32(hidden, block->ffn2_weight, block->ffn2_bias,
                       normal, rows, 4 * channels, channels);
     for (size_t i = 0; i < count; ++i) current[i] += normal[i];
     return 1;
@@ -267,7 +267,7 @@ static void store_output(const float *tokens, float *output,
                          float *normal, size_t batches, size_t height,
                          size_t width, size_t channels) {
     size_t rows = batches * height * width, spatial = height * width;
-    bf_layer_norm_f32_ref(tokens, scale, bias, 1e-5f, normal, rows, channels);
+    bf_layer_norm_f32(tokens, scale, bias, 1e-5f, normal, rows, channels);
     for (size_t b = 0; b < batches; ++b)
         for (size_t p = 0; p < spatial; ++p)
             for (size_t c = 0; c < channels; ++c)
@@ -295,9 +295,9 @@ static void patch_merge(const bf_bound_patch_merge *merge, const float *input,
                                 : 0.0f;
                         }
             }
-    bf_layer_norm_f32_ref(unfolded, merge->norm_scale, merge->norm_bias,
+    bf_layer_norm_f32(unfolded, merge->norm_scale, merge->norm_bias,
                           1e-5f, unfolded, rows, 4 * channels);
-    bf_linear_f32_ref(unfolded, merge->reduction_weight, NULL, output,
+    bf_linear_f32(unfolded, merge->reduction_weight, NULL, output,
                       rows, 4 * channels, 2 * channels);
 }
 
@@ -321,7 +321,7 @@ int bf_swin_backbone_forward_ref(const bf_swin_backbone *net,
     void *attention_workspace = buffer_a + 6 * capacity;
     size_t attention_bytes = required - 6 * capacity * sizeof(float);
     patch_embed(net, input, buffer_a, batches, input_h, input_w, h, w);
-    bf_layer_norm_f32_ref(buffer_a, net->patch_norm_scale, net->patch_norm_bias,
+    bf_layer_norm_f32(buffer_a, net->patch_norm_scale, net->patch_norm_bias,
                           1e-5f, buffer_a, batches * h * w, 96);
     float *current = buffer_a, *other = buffer_b;
     float *outputs[3] = {out1, out2, out3};

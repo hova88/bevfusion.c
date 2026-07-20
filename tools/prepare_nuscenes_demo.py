@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -24,10 +25,12 @@ def sha256(path: Path) -> str:
 
 
 def main() -> None:
+    default_root = Path(os.environ.get(
+        "NUSCENES_ROOT", Path.home() / "datasets" / "nuscenes"))
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--root", type=Path, default=Path("/data/nuscenes"))
+    parser.add_argument("--root", type=Path, default=default_root)
     parser.add_argument("--output", type=Path,
-                        default=Path("/data/nuscenes/bevfusion-demo"))
+                        default=default_root / "bevfusion-demo")
     parser.add_argument("--version", default="v1.0-mini")
     parser.add_argument("--start", type=int, default=0)
     parser.add_argument("--count", type=int, default=12)

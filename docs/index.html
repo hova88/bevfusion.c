@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A visual tour of BEVFusion.c: tensors, operators, memory residency, and CUDA optimization.">
+  <title>BEVFusion.c — From sensors to 3D detections</title>
+  <link rel="stylesheet" href="site.css">
+  <script src="site.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#top"><img src="bevfusion-mark.svg" alt="" width="30"><span>BEVFusion.c</span></a>
+    <nav aria-label="Article"><a href="#pipeline">Pipeline</a><a href="#operators">Operators</a><a href="#optimization">Optimization</a><a href="#build">Build</a><a class="source" href="https://github.com/hova88/bevfusion.c">Source ↗</a></nav>
+  </header>
+  <main id="top"><article>
+    <header class="hero">
+      <p class="eyebrow">A visual systems walkthrough</p>
+      <h1>Six cameras and LiDAR,<br>meeting on one map.</h1>
+      <p class="dek">BEVFusion.c is a small C11/CUDA runtime for a frozen BEVFusion graph. Follow every important tensor, see how each operator reshapes it, and inspect the optimizations that survived numerical validation.</p>
+      <div class="hero-meta"><span>18.43 MB in / frame</span><span>142.38 ms warm¹</span><span>8.8 KB out / frame</span></div>
+      <svg class="wide hero-visual" viewBox="0 0 900 330" role="img" aria-labelledby="hero-title">
+        <title id="hero-title">Six camera views and LiDAR points become a bird's-eye-view detection map</title>
+        <defs><pattern id="grid" width="18" height="18" patternUnits="userSpaceOnUse"><path d="M18 0H0V18" fill="none" stroke="#d8dee7"/></pattern><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0l8 4-8 4z" fill="#5d6b7a"/></marker></defs>
+        <g class="camera-stack" transform="translate(20 44)">
+          <g><rect width="110" height="64" rx="6"/><path d="M7 52l28-22 21 16 17-11 30 17"/></g><g transform="translate(80 34)"><rect width="110" height="64" rx="6"/><path d="M7 52l28-22 21 16 17-11 30 17"/></g><g transform="translate(16 92)"><rect width="110" height="64" rx="6"/><path d="M7 52l28-22 21 16 17-11 30 17"/></g><g transform="translate(96 126)"><rect width="110" height="64" rx="6"/><path d="M7 52l28-22 21 16 17-11 30 17"/></g><g transform="translate(30 184)"><rect width="110" height="64" rx="6"/><path d="M7 52l28-22 21 16 17-11 30 17"/></g><g transform="translate(110 218)"><rect width="110" height="64" rx="6"/><path d="M7 52l28-22 21 16 17-11 30 17"/></g>
+        </g>
+        <g class="lidar-cloud" transform="translate(290 85)"><path d="M0 102h190M95 7v190"/><circle cx="42" cy="72" r="3"/><circle cx="76" cy="35" r="2"/><circle cx="90" cy="95" r="3"/><circle cx="20" cy="119" r="2"/><circle cx="112" cy="61" r="2"/><circle cx="129" cy="126" r="3"/><circle cx="54" cy="144" r="2"/><circle cx="145" cy="29" r="2"/><circle cx="158" cy="86" r="3"/><circle cx="103" cy="162" r="2"/><circle cx="31" cy="176" r="3"/></g>
+        <path class="flow" d="M246 163H315M472 163h68" marker-end="url(#arrow)"/>
+        <g transform="translate(550 20)"><rect class="bev" width="320" height="290" rx="8" fill="url(#grid)"/><path class="road" d="M142 290c12-73 20-130 12-290M210 290c-2-79-2-160 18-290"/><g class="boxes"><rect x="88" y="178" width="33" height="58" transform="rotate(-12 104 207)"/><rect x="196" y="112" width="29" height="54" transform="rotate(7 210 139)"/><rect x="132" y="69" width="20" height="34" transform="rotate(-25 142 86)"/><rect x="238" y="216" width="18" height="29" transform="rotate(33 247 230)"/></g><circle class="ego" cx="160" cy="245" r="7"/><path class="ego" d="M160 228v-14"/></g>
+        <text x="34" y="28">6 × RGB</text><text x="312" y="62">LiDAR</text><text x="564" y="44">metric bird's-eye view</text>
+      </svg>
+      <p class="caption">The modalities are not overlaid as pictures. Each is encoded into a metric-aligned feature grid before fusion.</p>
+    </header>
+
+    <section><p class="section-number">01 — The idea</p><h2>Why meet in bird’s-eye view?</h2><p>A camera is dense in appearance but ambiguous in depth. LiDAR is sparse in appearance but precise in 3D. BEVFusion turns both into features indexed by the same ground-plane coordinates. Once a cell means the same physical patch of road in both branches, fusion becomes ordinary channel concatenation.</p><aside class="definition"><strong>BEV</strong><span>Bird’s-eye view: a top-down metric grid. The high-resolution camera grid is 360 × 360 at 0.3 m per cell; the fused detection grid is 180 × 180.</span></aside></section>
+
+    <section id="pipeline">
+      <p class="section-number">02 — Tensor pipe</p><h2>Follow one frame through the graph.</h2><p>Select a stage. Layout and ownership stay explicit—the two details most likely to disappear inside a framework runtime.</p>
+      <div class="stage-tabs" role="tablist"><button role="tab" aria-selected="true" data-stage="input">Input</button><button role="tab" aria-selected="false" data-stage="camera">Camera</button><button role="tab" aria-selected="false" data-stage="lidar">LiDAR</button><button role="tab" aria-selected="false" data-stage="fusion">Fusion</button><button role="tab" aria-selected="false" data-stage="output">Output</button></div>
+      <div class="tensor-stage" aria-live="polite"><div class="tensor-shape" id="tensor-shape">[6, 3, 256, 704] + [P, 5]</div><div><p class="tensor-name" id="tensor-name">Normalized cameras + timed points</p><p id="tensor-copy">Six NCHW cameras, a dynamic point table, and 210 calibration floats enter from the CRC-protected BFI mapping.</p></div><div class="memory-badge" id="tensor-memory">host mmap → one input-boundary H2D</div></div>
+      <div class="pipe"><span>RGB<br><b>6×3×256×704</b></span><i>→</i><span>Swin<br><b>3 scales</b></span><i>→</i><span>Depth + LSS<br><b>80×180×180</b></span><em>+</em><span>Points<br><b>P×5</b></span><i>→</i><span>Sparse CNN<br><b>256×180×180</b></span><i>→</i><span>Fusion<br><b>336×180×180</b></span><i>→</i><span>Boxes<br><b>≤200×11</b></span></div>
+    </section>
+
+    <section id="operators">
+      <p class="section-number">03 — Operator decomposition</p><h2>The camera branch: learn depth, then lift.</h2><p>Swin-T extracts multi-scale image features. An FPN returns them to a common width. The depth head predicts a categorical depth distribution and a context vector for every image location. Calibration turns each image-depth pair into a BEV cell.</p>
+      <svg class="wide figure" viewBox="0 0 800 330" role="img" aria-labelledby="lift-title"><title id="lift-title">Lift-splat maps image features through depth bins into bird's-eye-view cells</title><defs><marker id="small-arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0l7 3.5L0 7z" fill="#58687a"/></marker></defs><g transform="translate(30 45)"><rect class="plane" width="210" height="140"/><path class="image-lines" d="M0 35h210M0 70h210M0 105h210M42 0v140M84 0v140M126 0v140M168 0v140"/><circle class="hot" cx="126" cy="70" r="7"/></g><g class="rays"><path d="M240 115L510 42M240 115L510 112M240 115L510 182"/><circle cx="325" cy="92" r="5"/><circle cx="403" cy="70" r="5"/><circle class="hot" cx="473" cy="52" r="7"/></g><path class="flow" d="M500 112h55" marker-end="url(#small-arrow)"/><g transform="translate(575 30)"><rect class="plane" width="190" height="190"/><path class="image-lines" d="M0 38h190M0 76h190M0 114h190M0 152h190M38 0v190M76 0v190M114 0v190M152 0v190"/><rect class="cell" x="114" y="38" width="38" height="38"/></g><text x="30" y="218">image feature</text><text x="298" y="222">118 depth bins</text><text x="586" y="248">metric BEV cell</text><text class="annotation" x="30" y="278">context[c,h,w] × probability[d,h,w] → contribution[cell,c]</text></svg>
+      <p class="caption">“Lift” creates depth-weighted features along camera rays; “splat” sums contributions landing in the same ground cell.</p>
+      <h2>The LiDAR branch: preserve sparsity.</h2><p>Points are deterministically grouped into voxels. MeanVFE averages at most ten points per voxel. Twenty-one sparse convolutions reuse coordinate maps, then height compression creates a dense <code>[1,256,180,180]</code> tensor only at the branch boundary.</p>
+      <div class="sparse-figure"><div><span class="point p1"></span><span class="point p2"></span><span class="point p3"></span><span class="point p4"></span><small>272k timed points</small></div><b>stable group →</b><div class="voxel-grid"><span></span><span class="active"></span><span></span><span></span><span class="active"></span><span></span><span class="active"></span><span></span><span></span><small>bounded active voxels</small></div><b>sparse CNN →</b><div class="dense-grid"><span></span><small>256 × 180 × 180 BEV</small></div></div>
+      <h2>TransFusion: ask the map for objects.</h2><p>Image and LiDAR BEVs concatenate to 336 channels. A dense backbone produces a shared feature and class heatmap. The top 200 locations become queries; attention, an FFN, and six heads decode metric center, dimensions, rotation, velocity, class, and score.</p>
+    </section>
+
+    <section id="memory"><p class="section-number">04 — Residency</p><h2>Move tensors at the boundary, not between operators.</h2><p>A fast kernel cannot rescue a graph that repeatedly returns to the host. CUDA uploads BFI inputs once, owns reusable weights and scratch, and copies back only canonical detections.</p><div class="residency"><div><strong>Host</strong><span>BFW mmap</span><span>BFI mmap</span><span>JSON / TUI</span></div><div class="transfer"><span>18,426,080 B H2D →</span><span>← 8,804 B D2H</span></div><div class="device"><strong>GPU · 1118.71 MiB owned</strong><span>Swin + camera 472.95 MiB</span><span>LiDAR 323.57 MiB</span><span>fusion + decoder + boundaries</span></div></div><p class="caption">Recorded on one RTX 4060 Ti run. “Owned” is explicit allocation accounting, not a portable promise.</p></section>
+
+    <section id="optimization">
+      <p class="section-number">05 — Optimization worklog</p><h2>Every fast idea passes through an oracle.</h2><p>The scalar route stays as reference. A candidate is promoted only when the relevant complete slice remains within tolerance. Several intuitively good ideas lost.</p>
+      <div class="worklog">
+        <article><div class="worklog-head"><span>Portable CPU graph</span><strong>209.32 → 11.71 s</strong></div><div class="bars"><i style="--w:100%">scalar oracle</i><i class="win" style="--w:5.59%">OpenMP + SIMD-friendly loops</i></div><p>Keep the scalar dense kernels switchable, then parallelize output ownership, reuse sparse coordinate lookups, remove padding branches, and vectorize contiguous reductions. Generic Netlib BLAS regressed and is not auto-selected.</p></article>
+        <article><div class="worklog-head"><span>CPU proposal selection</span><strong>2,833 → 8.2 ms</strong></div><div class="bars"><i style="--w:100%">repeated scan + prior search</i><i class="win" style="--w:1%">bounded 200-entry heap</i></div><p>One stable top-k scan replaces an O(N·K²) search while preserving score order and the original flat-index tie rule. The complete TransFusion checkpoint oracle still passes.</p></article>
+        <article><div class="worklog-head"><span>LSS pooling</span><strong>85.58 → 1.75 ms</strong></div><div class="bars"><i style="--w:100%">atomic geometry</i><i class="win" style="--w:2.05%">stable intervals</i></div><p>Sort contributions into stable cell intervals. One block reduces each interval, removing atomics and full XYZ materialization. Precomputed ranks with the same atomics regressed to 92.98 ms.</p></article>
+        <article><div class="worklog-head"><span>Swin-T</span><strong>87.75 → 58.06 ms</strong></div><div class="bars"><i style="--w:100%">one query</i><i class="win" style="--w:66.16%">shared K/V + bounded chunks</i></div><p>Reuse K/V and bound FFN/window scratch. Residency fell from 393.73 to 216.27 MiB. A larger 16-query tile and TF32 both failed their gates.</p></article>
+        <article><div class="worklog-head"><span>TransFusion attention</span><strong>22.47 → 17.16 ms</strong></div><div class="bars"><i style="--w:100%">one query / block</i><i class="win" style="--w:76.38%">8 query warps</i></div><p>Online softmax stores one stable (m, l) pair per query and head. Eight query warps won; sixteen regressed. Fast <code>__expf</code> stays explicitly approximate.</p></article>
+        <article><div class="worklog-head"><span>Scheduling</span><strong>142.38 vs 145.78 ms</strong></div><div class="bars"><i class="win" style="--w:97.67%">one stream</i><i class="lose" style="--w:100%">two streams</i></div><p>Camera/LiDAR overlap looked attractive, but resource contention made it 2.4% slower. The serial schedule remains the measured default.</p></article>
+      </div>
+      <div class="result-card"><div><span>CPU · 16 threads</span><strong>11,707.11 ms</strong><small>209,320.59 ms scalar · 342.02 MiB arena</small></div><div class="result-arrow">→</div><div><span>CUDA strict graph</span><strong>142.38 ms</strong><small>1.823 mm max center error</small></div></div><p class="caption">CPU is one monotonic-clock WSL2 profile on an i5-14600KF; CUDA is a five-process warm median on one RTX 4060 Ti, CUDA 12.4. Hardware-specific evidence, not a cross-platform speed guarantee.</p>
+      <h2>CPU is complete, but this model is not interactive on CPU.</h2>
+      <p>The remaining latency is concentrated in trained dense compute, not file parsing or proposal selection. More portable-C tuning is no longer the primary roadmap for this checkpoint.</p>
+      <div class="worklog">
+        <article><div class="worklog-head"><span>Dense BEV fusion + backbone</span><strong>6.11 s · 52%</strong></div><div class="bars"><i class="lose" style="--w:52%">wide 3×3 convolutions · 180×180</i></div></article>
+        <article><div class="worklog-head"><span>Six-camera Swin-T</span><strong>3.48 s · 30%</strong></div><div class="bars"><i style="--w:30%">windows + projections + FFNs</i></div></article>
+        <article><div class="worklog-head"><span>Everything else</span><strong>2.12 s · 18%</strong></div><div class="bars"><i class="win" style="--w:18%">LiDAR + FPN + depth + LSS + decode</i></div></article>
+      </div>
+      <aside class="definition"><strong>Next</strong><span>Distill or replace Swin-T; reduce camera resolution or 118 depth bins; coarsen the BEV grid; prune the dense BEV backbone; calibrate INT8/FP16. Every model change needs a new checkpoint, export contract, full oracle pass, and nuScenes evaluation.</span></aside>
+    </section>
+
+    <section id="build"><p class="section-number">06 — Reproduce it</p><h2>Start small. Add dependencies only when needed.</h2>
+      <ol class="steps">
+        <li><span>1</span><div><h3>Prove the portable core</h3><pre><code>make doctor
+make ENABLE_CUDA=0 test</code></pre><p>No dataset, checkpoint, Python package, or GPU is required.</p></div></li>
+        <li><span>2</span><div><h3>Download the required checkpoint</h3><pre><code>export NUSCENES_ROOT=/data/nuscenes
+mkdir -p "$NUSCENES_ROOT/checkpoints"
+# save as checkpoints/cbgs_bevfusion.pth</code></pre><p><a href="https://drive.google.com/file/d/1X50b-8immqlqD8VPAUkSKI0Ls-4k37g9/view?usp=share_link">Download cbgs_bevfusion.pth from Google Drive</a>. It is an external asset and is not covered by the repository MIT License.</p></div></li>
+        <li><span>3</span><div><h3>Prepare offline tools</h3><pre><code>python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements/demo.txt</code></pre><p>This adds NumPy, Pillow, and the nuScenes devkit.</p></div></li>
+        <li><span>4</span><div><h3>Pack frames and export weights</h3><pre><code>export NUSCENES_ROOT=/data/nuscenes
+make demo-data
+make model</code></pre><p>PyTorch is required only for model export and oracle generation.</p></div></li>
+        <li><span>5</span><div><h3>Require the accelerator</h3><pre><code>make ENABLE_CUDA=1 CUDA_ARCH=sm_89
+make cuda-test</code></pre><p>Change the architecture for the target GPU. Explicit mode stops on incomplete CUDA/cuDNN.</p></div></li>
+      </ol>
+      <div class="platforms"><span><b>WSL2 / Linux</b>OpenMP/OpenBLAS + NVIDIA CUDA</span><span><b>macOS</b>Accelerate CPU</span><span><b>Jetson</b>OpenMP CPU + JetPack CUDA</span></div><p>Continue with the <a href="BUILDING.md">platform build guide</a>, <a href="DATA.md">data guide</a>, and <a href="PORTABILITY.md">portability review</a>.</p>
+    </section>
+    <section><p class="section-number">07 — What the numbers mean</p><h2>Equivalence is not dataset accuracy.</h2><p>Kernel fixtures prove an operator. Matching raw outputs proves the frozen graph. Official mAP/NDS requires results tied to nuScenes sample tokens and evaluated with the official protocol. BFI v1 omits that global metadata, so this project does not turn a convincing demo into an unsupported accuracy claim.</p><blockquote>Optimize the actual bottleneck, preserve a reference path, and attach every claim to numerical evidence.</blockquote></section>
+  </article></main>
+  <footer><div><img src="bevfusion-mark.svg" alt="" width="28"><strong>BEVFusion.c</strong></div><p>A dependency-free static article. Visual storytelling inspired by Simon Boehm’s <a href="https://siboehm.com/articles/22/CUDA-MMM">CUDA matmul worklog</a>; diagrams and text are original.</p><p><a href="https://github.com/hova88/bevfusion.c#readme">README</a> · <a href="https://github.com/hova88/bevfusion.c/tree/main/wiki">Engineering wiki</a> · <a href="https://github.com/hova88/bevfusion.c/blob/main/benchmark.csv">Raw benchmarks</a></p></footer>
+</body>
+</html>

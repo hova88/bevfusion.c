@@ -115,9 +115,9 @@ size_t bf_image_fpn_workspace_bytes(size_t height, size_t width) {
 
 static void bn_relu(float *values, const bf_bound_bn *bn,
                     size_t height, size_t width) {
-    bf_batch_norm_2d_f32_ref(values, bn->scale, bn->bias, bn->mean,
+    bf_batch_norm_2d_f32(values, bn->scale, bn->bias, bn->mean,
                              bn->variance, 1e-5f, values, 1, 256, height, width);
-    bf_relu_f32_ref(values, values, 256 * height * width);
+    bf_relu_f32(values, values, 256 * height * width);
 }
 
 static void bilinear_channel(const float *input, size_t in_h, size_t in_w,
@@ -156,12 +156,12 @@ static int fuse_level(const bf_image_fpn *fpn, size_t level,
                          concat + (lower_channels + c) * out_hw, out_h, out_w);
     bf_conv2d_desc lateral = {1, lower_channels + upper_channels, out_h, out_w,
                               256, 1, 1, 1, 1, 0, 0, 1, 1, 1};
-    if (!bf_conv2d_f32_ref(concat, fpn->lateral_weight[level], NULL,
+    if (!bf_conv2d_f32(concat, fpn->lateral_weight[level], NULL,
                            temporary, &lateral)) return 0;
     bn_relu(temporary, &fpn->lateral_bn[level], out_h, out_w);
     bf_conv2d_desc final = {1, 256, out_h, out_w, 256, 3, 3,
                             1, 1, 1, 1, 1, 1, 1};
-    if (!bf_conv2d_f32_ref(temporary, fpn->output_weight[level], NULL,
+    if (!bf_conv2d_f32(temporary, fpn->output_weight[level], NULL,
                            output, &final)) return 0;
     bn_relu(output, &fpn->output_bn[level], out_h, out_w);
     return 1;
