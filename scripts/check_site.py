@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -41,7 +42,18 @@ def main() -> None:
             missing.append(value)
     if missing:
         raise SystemExit("broken local site references:\n  " + "\n  ".join(missing))
+    graph = json.loads((root / "model-graph.json").read_text(encoding="utf-8"))
+    required = {"schema_version", "checkpoint", "sources", "summary", "flow", "stages", "modules"}
+    if graph.keys() < required or graph["schema_version"] != 1:
+        raise SystemExit("docs/model-graph.json: invalid schema")
+    if graph["summary"]["modules"] != len(graph["modules"]):
+        raise SystemExit("docs/model-graph.json: module total does not match entries")
+    if graph["summary"]["tensors"] != sum(len(module["tensor_names"]) for module in graph["modules"]):
+        raise SystemExit("docs/model-graph.json: tensor total does not match entries")
+    if len(graph["flow"]) < 10 or len(graph["stages"]) != 7:
+        raise SystemExit("docs/model-graph.json: incomplete runtime flow or stage list")
     print(f"docs/index.html: {checked} local references resolve")
+    print(f"docs/model-graph.json: {len(graph['flow'])} flow steps, {len(graph['modules'])} entries")
 
 
 if __name__ == "__main__":

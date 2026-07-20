@@ -31,4 +31,6 @@ python3 -m http.server --directory docs 8000
 
 Open `http://localhost:8000`. Check a wide desktop viewport and a narrow mobile
 viewport. The article honors reduced-motion preferences and remains readable
-without JavaScript; JavaScript only switches the tensor-stage explainer.
+without JavaScript; JavaScript switches the tensor-stage explainer and filters
+the generated checkpoint model explorer. The complete model remains available
+as `model-summary.md` when scripting is disabled.

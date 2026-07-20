@@ -1,0 +1,6091 @@
+{
+  "schema_version": 1,
+  "checkpoint": {
+    "file": "cbgs_bevfusion.pth",
+    "sha256": "3030d7a9f46b0cef0a1d0cddf26472dc32ba8d85826b0c752c713c95185486e9",
+    "file_bytes": 163669107,
+    "stored_tensor_bytes": 163487240
+  },
+  "sources": {
+    "checkpoint": "tensor names, weight shapes, dtypes and stored element counts",
+    "openpcdet_config": "https://github.com/open-mmlab/OpenPCDet/tree/233f849829b6ac19afb8af8837a0246890908755/tools/cfgs/nuscenes_models/bevfusion.yaml",
+    "openpcdet_commit": "233f849829b6ac19afb8af8837a0246890908755",
+    "openpcdet_reference_note": "Owner-supplied architecture reference; the checkpoint stores no training commit identity",
+    "local_config": "/root/repo/code/bevfusion.c/cfgs/bevfusion.yaml",
+    "local_config_sha256": "a47b9700ea7b86242f8036f604deb30db17d51f803caa81a6a213848a9ba3419",
+    "runtime_contract": "include/*.h, src/runtime.c and full checkpoint oracles"
+  },
+  "summary": {
+    "tensors": 525,
+    "modules": 246,
+    "elements": 40842995,
+    "bytes": 163487240
+  },
+  "flow": [
+    {
+      "id": "input",
+      "operator": "Sensor input",
+      "input": "RGB + points",
+      "output": "[6, 3, 256, 704] + [P, 5]",
+      "note": "BFI v1 runtime input"
+    },
+    {
+      "id": "depth-raster",
+      "operator": "Depth raster",
+      "input": "points + calibration",
+      "output": "[6, 1, 256, 704]",
+      "note": "Nearest projected LiDAR depth"
+    },
+    {
+      "id": "swin",
+      "operator": "Swin-T",
+      "input": "[6, 3, 256, 704]",
+      "output": "[6, 192, 32, 88] · [6, 384, 16, 44] · [6, 768, 8, 22]",
+      "note": "Stages 1–3 from OpenPCDet OUT_INDICES"
+    },
+    {
+      "id": "fpn",
+      "operator": "Generalized LSS FPN",
+      "input": "three Swin scales",
+      "output": "[6, 256, 32, 88] · [6, 256, 16, 44]",
+      "note": "C runtime consumes the first two outputs"
+    },
+    {
+      "id": "depth-head",
+      "operator": "DepthLSSTransform head",
+      "input": "image feature + depth raster",
+      "output": "depth [6, 118, 32, 88] · context [6, 80, 32, 88]",
+      "note": "118 bins from [1 m, 60 m) at 0.5 m"
+    },
+    {
+      "id": "lss",
+      "operator": "Lift-splat",
+      "input": "depth × context + calibration",
+      "output": "[1, 80, 360, 360]",
+      "note": "0.3 m metric BEV cells"
+    },
+    {
+      "id": "image-down",
+      "operator": "Image BEV downsample",
+      "input": "[1, 80, 360, 360]",
+      "output": "[1, 80, 180, 180]",
+      "note": "Learned stride-2 downsample"
+    },
+    {
+      "id": "voxel",
+      "operator": "Voxelize + MeanVFE",
+      "input": "[P, 5]",
+      "output": "[V, 5] + coords [V, 4]",
+      "note": "V ≤ configured voxel capacity"
+    },
+    {
+      "id": "sparse",
+      "operator": "VoxelResBackBone8x",
+      "input": "sparse [V, 5]",
+      "output": "[1, 256, 180, 180]",
+      "note": "HeightCompression at sparse/dense boundary"
+    },
+    {
+      "id": "concat",
+      "operator": "Metric BEV concat",
+      "input": "camera 80ch + LiDAR 256ch",
+      "output": "[1, 336, 180, 180]",
+      "note": "No learned geometric alignment here"
+    },
+    {
+      "id": "bev-backbone",
+      "operator": "ConvFuser + BaseBEVBackbone",
+      "input": "[1, 336, 180, 180]",
+      "output": "spatial [1, 512, 180, 180] · shared [1, 128, 180, 180]",
+      "note": "Dense BEV feature extraction"
+    },
+    {
+      "id": "proposal",
+      "operator": "Heatmap + top-k",
+      "input": "shared [1, 128, 180, 180]",
+      "output": "heatmap [1, 10, 180, 180] · queries [1, 128, 200]",
+      "note": "200 stable proposals"
+    },
+    {
+      "id": "decoder",
+      "operator": "TransFusion decoder",
+      "input": "queries + shared BEV",
+      "output": "center 2 · height 1 · dim 3 · rot 2 · vel 2 · class 10, each × 200",
+      "note": "One cross-attention decoder layer"
+    },
+    {
+      "id": "output",
+      "operator": "Metric decode + rotated filter",
+      "input": "raw proposal fields",
+      "output": "≤ 200 × 11 public fields",
+      "note": "Canonical bf_detections ABI"
+    }
+  ],
+  "stages": [
+    {
+      "id": "camera",
+      "title": "Camera · Swin-T",
+      "description": "Window attention and MLP blocks",
+      "prefixes": [
+        "image_backbone"
+      ],
+      "modules": 107,
+      "tensors": 187,
+      "elements": 27549318,
+      "bytes": 110312520,
+      "operators": {
+        "Buffer": 12,
+        "Conv2d": 1,
+        "LayerNorm": 31,
+        "Learned table": 12,
+        "Linear": 51
+      }
+    },
+    {
+      "id": "neck",
+      "title": "Camera · FPN",
+      "description": "Three Swin scales become 256-channel features",
+      "prefixes": [
+        "neck"
+      ],
+      "modules": 8,
+      "tensors": 20,
+      "elements": 1593344,
+      "bytes": 6373376,
+      "operators": {
+        "BatchNorm": 4,
+        "Conv2d": 4
+      }
+    },
+    {
+      "id": "depth",
+      "title": "Camera · depth + LSS",
+      "description": "Depth distribution, context, lift-splat and downsample",
+      "prefixes": [
+        "vtransform"
+      ],
+      "modules": 21,
+      "tensors": 51,
+      "elements": 2609311,
+      "bytes": 10437256,
+      "operators": {
+        "BatchNorm": 8,
+        "Buffer": 4,
+        "Conv2d": 9
+      }
+    },
+    {
+      "id": "lidar",
+      "title": "LiDAR · sparse CNN",
+      "description": "MeanVFE followed by VoxelResBackBone8x",
+      "prefixes": [
+        "backbone_3d"
+      ],
+      "modules": 42,
+      "tensors": 105,
+      "elements": 2697008,
+      "bytes": 10788032,
+      "operators": {
+        "BatchNorm": 21,
+        "SparseConv3d": 21
+      }
+    },
+    {
+      "id": "fusion",
+      "title": "BEV · sensor fusion",
+      "description": "Camera and LiDAR features meet by metric cell",
+      "prefixes": [
+        "fuser"
+      ],
+      "modules": 2,
+      "tensors": 5,
+      "elements": 775168,
+      "bytes": 3100672,
+      "operators": {
+        "BatchNorm": 1,
+        "Conv2d": 1
+      }
+    },
+    {
+      "id": "bev",
+      "title": "BEV · dense backbone",
+      "description": "Two-scale BaseBEVBackbone",
+      "prefixes": [
+        "backbone_2d"
+      ],
+      "modules": 28,
+      "tensors": 70,
+      "elements": 4582400,
+      "bytes": 18329600,
+      "operators": {
+        "BatchNorm": 14,
+        "Conv2d": 12,
+        "ConvTranspose2d": 2
+      }
+    },
+    {
+      "id": "head",
+      "title": "Detection · TransFusion",
+      "description": "Heatmap proposals, attention and metric heads",
+      "prefixes": [
+        "dense_head"
+      ],
+      "modules": 38,
+      "tensors": 87,
+      "elements": 1036446,
+      "bytes": 4145784,
+      "operators": {
+        "BatchNorm": 9,
+        "Conv1d": 17,
+        "Conv2d": 3,
+        "LayerNorm": 3,
+        "Linear": 4,
+        "MultiheadAttention": 2
+      }
+    }
+  ],
+  "modules": [
+    {
+      "name": "image_backbone.patch_embed.projection",
+      "stage": "camera",
+      "operator": "Conv2d",
+      "tensor_shapes": [
+        [
+          96,
+          3,
+          4,
+          4
+        ],
+        [
+          96
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.patch_embed.projection.weight",
+        "image_backbone.patch_embed.projection.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 4704,
+      "bytes": 18816
+    },
+    {
+      "name": "image_backbone.patch_embed.norm",
+      "stage": "camera",
+      "operator": "LayerNorm",
+      "tensor_shapes": [
+        [
+          96
+        ],
+        [
+          96
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.patch_embed.norm.weight",
+        "image_backbone.patch_embed.norm.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 192,
+      "bytes": 768
+    },
+    {
+      "name": "image_backbone.stages.0.blocks.0.norm1",
+      "stage": "camera",
+      "operator": "LayerNorm",
+      "tensor_shapes": [
+        [
+          96
+        ],
+        [
+          96
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.0.blocks.0.norm1.weight",
+        "image_backbone.stages.0.blocks.0.norm1.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 192,
+      "bytes": 768
+    },
+    {
+      "name": "image_backbone.stages.0.blocks.0.attn.w_msa.relative_position_bias_table",
+      "stage": "camera",
+      "operator": "Learned table",
+      "tensor_shapes": [
+        [
+          169,
+          3
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.0.blocks.0.attn.w_msa.relative_position_bias_table"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 507,
+      "bytes": 2028
+    },
+    {
+      "name": "image_backbone.stages.0.blocks.0.attn.w_msa.relative_position_index",
+      "stage": "camera",
+      "operator": "Buffer",
+      "tensor_shapes": [
+        [
+          49,
+          49
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.0.blocks.0.attn.w_msa.relative_position_index"
+      ],
+      "dtypes": [
+        "int64"
+      ],
+      "elements": 2401,
+      "bytes": 19208
+    },
+    {
+      "name": "image_backbone.stages.0.blocks.0.attn.w_msa.qkv",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          288,
+          96
+        ],
+        [
+          288
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.0.blocks.0.attn.w_msa.qkv.weight",
+        "image_backbone.stages.0.blocks.0.attn.w_msa.qkv.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 27936,
+      "bytes": 111744
+    },
+    {
+      "name": "image_backbone.stages.0.blocks.0.attn.w_msa.proj",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          96,
+          96
+        ],
+        [
+          96
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.0.blocks.0.attn.w_msa.proj.weight",
+        "image_backbone.stages.0.blocks.0.attn.w_msa.proj.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 9312,
+      "bytes": 37248
+    },
+    {
+      "name": "image_backbone.stages.0.blocks.0.norm2",
+      "stage": "camera",
+      "operator": "LayerNorm",
+      "tensor_shapes": [
+        [
+          96
+        ],
+        [
+          96
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.0.blocks.0.norm2.weight",
+        "image_backbone.stages.0.blocks.0.norm2.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 192,
+      "bytes": 768
+    },
+    {
+      "name": "image_backbone.stages.0.blocks.0.ffn.layers.0.0",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          384,
+          96
+        ],
+        [
+          384
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.0.blocks.0.ffn.layers.0.0.weight",
+        "image_backbone.stages.0.blocks.0.ffn.layers.0.0.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 37248,
+      "bytes": 148992
+    },
+    {
+      "name": "image_backbone.stages.0.blocks.0.ffn.layers.1",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          96,
+          384
+        ],
+        [
+          96
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.0.blocks.0.ffn.layers.1.weight",
+        "image_backbone.stages.0.blocks.0.ffn.layers.1.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 36960,
+      "bytes": 147840
+    },
+    {
+      "name": "image_backbone.stages.0.blocks.1.norm1",
+      "stage": "camera",
+      "operator": "LayerNorm",
+      "tensor_shapes": [
+        [
+          96
+        ],
+        [
+          96
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.0.blocks.1.norm1.weight",
+        "image_backbone.stages.0.blocks.1.norm1.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 192,
+      "bytes": 768
+    },
+    {
+      "name": "image_backbone.stages.0.blocks.1.attn.w_msa.relative_position_bias_table",
+      "stage": "camera",
+      "operator": "Learned table",
+      "tensor_shapes": [
+        [
+          169,
+          3
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.0.blocks.1.attn.w_msa.relative_position_bias_table"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 507,
+      "bytes": 2028
+    },
+    {
+      "name": "image_backbone.stages.0.blocks.1.attn.w_msa.relative_position_index",
+      "stage": "camera",
+      "operator": "Buffer",
+      "tensor_shapes": [
+        [
+          49,
+          49
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.0.blocks.1.attn.w_msa.relative_position_index"
+      ],
+      "dtypes": [
+        "int64"
+      ],
+      "elements": 2401,
+      "bytes": 19208
+    },
+    {
+      "name": "image_backbone.stages.0.blocks.1.attn.w_msa.qkv",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          288,
+          96
+        ],
+        [
+          288
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.0.blocks.1.attn.w_msa.qkv.weight",
+        "image_backbone.stages.0.blocks.1.attn.w_msa.qkv.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 27936,
+      "bytes": 111744
+    },
+    {
+      "name": "image_backbone.stages.0.blocks.1.attn.w_msa.proj",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          96,
+          96
+        ],
+        [
+          96
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.0.blocks.1.attn.w_msa.proj.weight",
+        "image_backbone.stages.0.blocks.1.attn.w_msa.proj.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 9312,
+      "bytes": 37248
+    },
+    {
+      "name": "image_backbone.stages.0.blocks.1.norm2",
+      "stage": "camera",
+      "operator": "LayerNorm",
+      "tensor_shapes": [
+        [
+          96
+        ],
+        [
+          96
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.0.blocks.1.norm2.weight",
+        "image_backbone.stages.0.blocks.1.norm2.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 192,
+      "bytes": 768
+    },
+    {
+      "name": "image_backbone.stages.0.blocks.1.ffn.layers.0.0",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          384,
+          96
+        ],
+        [
+          384
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.0.blocks.1.ffn.layers.0.0.weight",
+        "image_backbone.stages.0.blocks.1.ffn.layers.0.0.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 37248,
+      "bytes": 148992
+    },
+    {
+      "name": "image_backbone.stages.0.blocks.1.ffn.layers.1",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          96,
+          384
+        ],
+        [
+          96
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.0.blocks.1.ffn.layers.1.weight",
+        "image_backbone.stages.0.blocks.1.ffn.layers.1.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 36960,
+      "bytes": 147840
+    },
+    {
+      "name": "image_backbone.stages.0.downsample.norm",
+      "stage": "camera",
+      "operator": "LayerNorm",
+      "tensor_shapes": [
+        [
+          384
+        ],
+        [
+          384
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.0.downsample.norm.weight",
+        "image_backbone.stages.0.downsample.norm.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 768,
+      "bytes": 3072
+    },
+    {
+      "name": "image_backbone.stages.0.downsample.reduction",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          192,
+          384
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.0.downsample.reduction.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 73728,
+      "bytes": 294912
+    },
+    {
+      "name": "image_backbone.stages.1.blocks.0.norm1",
+      "stage": "camera",
+      "operator": "LayerNorm",
+      "tensor_shapes": [
+        [
+          192
+        ],
+        [
+          192
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.1.blocks.0.norm1.weight",
+        "image_backbone.stages.1.blocks.0.norm1.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 384,
+      "bytes": 1536
+    },
+    {
+      "name": "image_backbone.stages.1.blocks.0.attn.w_msa.relative_position_bias_table",
+      "stage": "camera",
+      "operator": "Learned table",
+      "tensor_shapes": [
+        [
+          169,
+          6
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.1.blocks.0.attn.w_msa.relative_position_bias_table"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 1014,
+      "bytes": 4056
+    },
+    {
+      "name": "image_backbone.stages.1.blocks.0.attn.w_msa.relative_position_index",
+      "stage": "camera",
+      "operator": "Buffer",
+      "tensor_shapes": [
+        [
+          49,
+          49
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.1.blocks.0.attn.w_msa.relative_position_index"
+      ],
+      "dtypes": [
+        "int64"
+      ],
+      "elements": 2401,
+      "bytes": 19208
+    },
+    {
+      "name": "image_backbone.stages.1.blocks.0.attn.w_msa.qkv",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          576,
+          192
+        ],
+        [
+          576
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.1.blocks.0.attn.w_msa.qkv.weight",
+        "image_backbone.stages.1.blocks.0.attn.w_msa.qkv.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 111168,
+      "bytes": 444672
+    },
+    {
+      "name": "image_backbone.stages.1.blocks.0.attn.w_msa.proj",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          192,
+          192
+        ],
+        [
+          192
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.1.blocks.0.attn.w_msa.proj.weight",
+        "image_backbone.stages.1.blocks.0.attn.w_msa.proj.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 37056,
+      "bytes": 148224
+    },
+    {
+      "name": "image_backbone.stages.1.blocks.0.norm2",
+      "stage": "camera",
+      "operator": "LayerNorm",
+      "tensor_shapes": [
+        [
+          192
+        ],
+        [
+          192
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.1.blocks.0.norm2.weight",
+        "image_backbone.stages.1.blocks.0.norm2.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 384,
+      "bytes": 1536
+    },
+    {
+      "name": "image_backbone.stages.1.blocks.0.ffn.layers.0.0",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          768,
+          192
+        ],
+        [
+          768
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.1.blocks.0.ffn.layers.0.0.weight",
+        "image_backbone.stages.1.blocks.0.ffn.layers.0.0.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 148224,
+      "bytes": 592896
+    },
+    {
+      "name": "image_backbone.stages.1.blocks.0.ffn.layers.1",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          192,
+          768
+        ],
+        [
+          192
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.1.blocks.0.ffn.layers.1.weight",
+        "image_backbone.stages.1.blocks.0.ffn.layers.1.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 147648,
+      "bytes": 590592
+    },
+    {
+      "name": "image_backbone.stages.1.blocks.1.norm1",
+      "stage": "camera",
+      "operator": "LayerNorm",
+      "tensor_shapes": [
+        [
+          192
+        ],
+        [
+          192
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.1.blocks.1.norm1.weight",
+        "image_backbone.stages.1.blocks.1.norm1.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 384,
+      "bytes": 1536
+    },
+    {
+      "name": "image_backbone.stages.1.blocks.1.attn.w_msa.relative_position_bias_table",
+      "stage": "camera",
+      "operator": "Learned table",
+      "tensor_shapes": [
+        [
+          169,
+          6
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.1.blocks.1.attn.w_msa.relative_position_bias_table"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 1014,
+      "bytes": 4056
+    },
+    {
+      "name": "image_backbone.stages.1.blocks.1.attn.w_msa.relative_position_index",
+      "stage": "camera",
+      "operator": "Buffer",
+      "tensor_shapes": [
+        [
+          49,
+          49
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.1.blocks.1.attn.w_msa.relative_position_index"
+      ],
+      "dtypes": [
+        "int64"
+      ],
+      "elements": 2401,
+      "bytes": 19208
+    },
+    {
+      "name": "image_backbone.stages.1.blocks.1.attn.w_msa.qkv",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          576,
+          192
+        ],
+        [
+          576
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.1.blocks.1.attn.w_msa.qkv.weight",
+        "image_backbone.stages.1.blocks.1.attn.w_msa.qkv.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 111168,
+      "bytes": 444672
+    },
+    {
+      "name": "image_backbone.stages.1.blocks.1.attn.w_msa.proj",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          192,
+          192
+        ],
+        [
+          192
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.1.blocks.1.attn.w_msa.proj.weight",
+        "image_backbone.stages.1.blocks.1.attn.w_msa.proj.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 37056,
+      "bytes": 148224
+    },
+    {
+      "name": "image_backbone.stages.1.blocks.1.norm2",
+      "stage": "camera",
+      "operator": "LayerNorm",
+      "tensor_shapes": [
+        [
+          192
+        ],
+        [
+          192
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.1.blocks.1.norm2.weight",
+        "image_backbone.stages.1.blocks.1.norm2.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 384,
+      "bytes": 1536
+    },
+    {
+      "name": "image_backbone.stages.1.blocks.1.ffn.layers.0.0",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          768,
+          192
+        ],
+        [
+          768
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.1.blocks.1.ffn.layers.0.0.weight",
+        "image_backbone.stages.1.blocks.1.ffn.layers.0.0.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 148224,
+      "bytes": 592896
+    },
+    {
+      "name": "image_backbone.stages.1.blocks.1.ffn.layers.1",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          192,
+          768
+        ],
+        [
+          192
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.1.blocks.1.ffn.layers.1.weight",
+        "image_backbone.stages.1.blocks.1.ffn.layers.1.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 147648,
+      "bytes": 590592
+    },
+    {
+      "name": "image_backbone.stages.1.downsample.norm",
+      "stage": "camera",
+      "operator": "LayerNorm",
+      "tensor_shapes": [
+        [
+          768
+        ],
+        [
+          768
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.1.downsample.norm.weight",
+        "image_backbone.stages.1.downsample.norm.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 1536,
+      "bytes": 6144
+    },
+    {
+      "name": "image_backbone.stages.1.downsample.reduction",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          384,
+          768
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.1.downsample.reduction.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 294912,
+      "bytes": 1179648
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.0.norm1",
+      "stage": "camera",
+      "operator": "LayerNorm",
+      "tensor_shapes": [
+        [
+          384
+        ],
+        [
+          384
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.0.norm1.weight",
+        "image_backbone.stages.2.blocks.0.norm1.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 768,
+      "bytes": 3072
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.0.attn.w_msa.relative_position_bias_table",
+      "stage": "camera",
+      "operator": "Learned table",
+      "tensor_shapes": [
+        [
+          169,
+          12
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.0.attn.w_msa.relative_position_bias_table"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 2028,
+      "bytes": 8112
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.0.attn.w_msa.relative_position_index",
+      "stage": "camera",
+      "operator": "Buffer",
+      "tensor_shapes": [
+        [
+          49,
+          49
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.0.attn.w_msa.relative_position_index"
+      ],
+      "dtypes": [
+        "int64"
+      ],
+      "elements": 2401,
+      "bytes": 19208
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.0.attn.w_msa.qkv",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          1152,
+          384
+        ],
+        [
+          1152
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.0.attn.w_msa.qkv.weight",
+        "image_backbone.stages.2.blocks.0.attn.w_msa.qkv.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 443520,
+      "bytes": 1774080
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.0.attn.w_msa.proj",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          384,
+          384
+        ],
+        [
+          384
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.0.attn.w_msa.proj.weight",
+        "image_backbone.stages.2.blocks.0.attn.w_msa.proj.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 147840,
+      "bytes": 591360
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.0.norm2",
+      "stage": "camera",
+      "operator": "LayerNorm",
+      "tensor_shapes": [
+        [
+          384
+        ],
+        [
+          384
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.0.norm2.weight",
+        "image_backbone.stages.2.blocks.0.norm2.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 768,
+      "bytes": 3072
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.0.ffn.layers.0.0",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          1536,
+          384
+        ],
+        [
+          1536
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.0.ffn.layers.0.0.weight",
+        "image_backbone.stages.2.blocks.0.ffn.layers.0.0.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 591360,
+      "bytes": 2365440
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.0.ffn.layers.1",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          384,
+          1536
+        ],
+        [
+          384
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.0.ffn.layers.1.weight",
+        "image_backbone.stages.2.blocks.0.ffn.layers.1.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 590208,
+      "bytes": 2360832
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.1.norm1",
+      "stage": "camera",
+      "operator": "LayerNorm",
+      "tensor_shapes": [
+        [
+          384
+        ],
+        [
+          384
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.1.norm1.weight",
+        "image_backbone.stages.2.blocks.1.norm1.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 768,
+      "bytes": 3072
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.1.attn.w_msa.relative_position_bias_table",
+      "stage": "camera",
+      "operator": "Learned table",
+      "tensor_shapes": [
+        [
+          169,
+          12
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.1.attn.w_msa.relative_position_bias_table"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 2028,
+      "bytes": 8112
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.1.attn.w_msa.relative_position_index",
+      "stage": "camera",
+      "operator": "Buffer",
+      "tensor_shapes": [
+        [
+          49,
+          49
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.1.attn.w_msa.relative_position_index"
+      ],
+      "dtypes": [
+        "int64"
+      ],
+      "elements": 2401,
+      "bytes": 19208
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.1.attn.w_msa.qkv",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          1152,
+          384
+        ],
+        [
+          1152
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.1.attn.w_msa.qkv.weight",
+        "image_backbone.stages.2.blocks.1.attn.w_msa.qkv.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 443520,
+      "bytes": 1774080
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.1.attn.w_msa.proj",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          384,
+          384
+        ],
+        [
+          384
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.1.attn.w_msa.proj.weight",
+        "image_backbone.stages.2.blocks.1.attn.w_msa.proj.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 147840,
+      "bytes": 591360
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.1.norm2",
+      "stage": "camera",
+      "operator": "LayerNorm",
+      "tensor_shapes": [
+        [
+          384
+        ],
+        [
+          384
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.1.norm2.weight",
+        "image_backbone.stages.2.blocks.1.norm2.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 768,
+      "bytes": 3072
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.1.ffn.layers.0.0",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          1536,
+          384
+        ],
+        [
+          1536
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.1.ffn.layers.0.0.weight",
+        "image_backbone.stages.2.blocks.1.ffn.layers.0.0.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 591360,
+      "bytes": 2365440
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.1.ffn.layers.1",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          384,
+          1536
+        ],
+        [
+          384
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.1.ffn.layers.1.weight",
+        "image_backbone.stages.2.blocks.1.ffn.layers.1.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 590208,
+      "bytes": 2360832
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.2.norm1",
+      "stage": "camera",
+      "operator": "LayerNorm",
+      "tensor_shapes": [
+        [
+          384
+        ],
+        [
+          384
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.2.norm1.weight",
+        "image_backbone.stages.2.blocks.2.norm1.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 768,
+      "bytes": 3072
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.2.attn.w_msa.relative_position_bias_table",
+      "stage": "camera",
+      "operator": "Learned table",
+      "tensor_shapes": [
+        [
+          169,
+          12
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.2.attn.w_msa.relative_position_bias_table"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 2028,
+      "bytes": 8112
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.2.attn.w_msa.relative_position_index",
+      "stage": "camera",
+      "operator": "Buffer",
+      "tensor_shapes": [
+        [
+          49,
+          49
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.2.attn.w_msa.relative_position_index"
+      ],
+      "dtypes": [
+        "int64"
+      ],
+      "elements": 2401,
+      "bytes": 19208
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.2.attn.w_msa.qkv",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          1152,
+          384
+        ],
+        [
+          1152
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.2.attn.w_msa.qkv.weight",
+        "image_backbone.stages.2.blocks.2.attn.w_msa.qkv.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 443520,
+      "bytes": 1774080
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.2.attn.w_msa.proj",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          384,
+          384
+        ],
+        [
+          384
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.2.attn.w_msa.proj.weight",
+        "image_backbone.stages.2.blocks.2.attn.w_msa.proj.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 147840,
+      "bytes": 591360
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.2.norm2",
+      "stage": "camera",
+      "operator": "LayerNorm",
+      "tensor_shapes": [
+        [
+          384
+        ],
+        [
+          384
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.2.norm2.weight",
+        "image_backbone.stages.2.blocks.2.norm2.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 768,
+      "bytes": 3072
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.2.ffn.layers.0.0",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          1536,
+          384
+        ],
+        [
+          1536
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.2.ffn.layers.0.0.weight",
+        "image_backbone.stages.2.blocks.2.ffn.layers.0.0.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 591360,
+      "bytes": 2365440
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.2.ffn.layers.1",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          384,
+          1536
+        ],
+        [
+          384
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.2.ffn.layers.1.weight",
+        "image_backbone.stages.2.blocks.2.ffn.layers.1.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 590208,
+      "bytes": 2360832
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.3.norm1",
+      "stage": "camera",
+      "operator": "LayerNorm",
+      "tensor_shapes": [
+        [
+          384
+        ],
+        [
+          384
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.3.norm1.weight",
+        "image_backbone.stages.2.blocks.3.norm1.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 768,
+      "bytes": 3072
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.3.attn.w_msa.relative_position_bias_table",
+      "stage": "camera",
+      "operator": "Learned table",
+      "tensor_shapes": [
+        [
+          169,
+          12
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.3.attn.w_msa.relative_position_bias_table"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 2028,
+      "bytes": 8112
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.3.attn.w_msa.relative_position_index",
+      "stage": "camera",
+      "operator": "Buffer",
+      "tensor_shapes": [
+        [
+          49,
+          49
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.3.attn.w_msa.relative_position_index"
+      ],
+      "dtypes": [
+        "int64"
+      ],
+      "elements": 2401,
+      "bytes": 19208
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.3.attn.w_msa.qkv",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          1152,
+          384
+        ],
+        [
+          1152
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.3.attn.w_msa.qkv.weight",
+        "image_backbone.stages.2.blocks.3.attn.w_msa.qkv.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 443520,
+      "bytes": 1774080
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.3.attn.w_msa.proj",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          384,
+          384
+        ],
+        [
+          384
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.3.attn.w_msa.proj.weight",
+        "image_backbone.stages.2.blocks.3.attn.w_msa.proj.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 147840,
+      "bytes": 591360
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.3.norm2",
+      "stage": "camera",
+      "operator": "LayerNorm",
+      "tensor_shapes": [
+        [
+          384
+        ],
+        [
+          384
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.3.norm2.weight",
+        "image_backbone.stages.2.blocks.3.norm2.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 768,
+      "bytes": 3072
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.3.ffn.layers.0.0",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          1536,
+          384
+        ],
+        [
+          1536
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.3.ffn.layers.0.0.weight",
+        "image_backbone.stages.2.blocks.3.ffn.layers.0.0.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 591360,
+      "bytes": 2365440
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.3.ffn.layers.1",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          384,
+          1536
+        ],
+        [
+          384
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.3.ffn.layers.1.weight",
+        "image_backbone.stages.2.blocks.3.ffn.layers.1.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 590208,
+      "bytes": 2360832
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.4.norm1",
+      "stage": "camera",
+      "operator": "LayerNorm",
+      "tensor_shapes": [
+        [
+          384
+        ],
+        [
+          384
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.4.norm1.weight",
+        "image_backbone.stages.2.blocks.4.norm1.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 768,
+      "bytes": 3072
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.4.attn.w_msa.relative_position_bias_table",
+      "stage": "camera",
+      "operator": "Learned table",
+      "tensor_shapes": [
+        [
+          169,
+          12
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.4.attn.w_msa.relative_position_bias_table"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 2028,
+      "bytes": 8112
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.4.attn.w_msa.relative_position_index",
+      "stage": "camera",
+      "operator": "Buffer",
+      "tensor_shapes": [
+        [
+          49,
+          49
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.4.attn.w_msa.relative_position_index"
+      ],
+      "dtypes": [
+        "int64"
+      ],
+      "elements": 2401,
+      "bytes": 19208
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.4.attn.w_msa.qkv",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          1152,
+          384
+        ],
+        [
+          1152
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.4.attn.w_msa.qkv.weight",
+        "image_backbone.stages.2.blocks.4.attn.w_msa.qkv.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 443520,
+      "bytes": 1774080
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.4.attn.w_msa.proj",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          384,
+          384
+        ],
+        [
+          384
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.4.attn.w_msa.proj.weight",
+        "image_backbone.stages.2.blocks.4.attn.w_msa.proj.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 147840,
+      "bytes": 591360
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.4.norm2",
+      "stage": "camera",
+      "operator": "LayerNorm",
+      "tensor_shapes": [
+        [
+          384
+        ],
+        [
+          384
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.4.norm2.weight",
+        "image_backbone.stages.2.blocks.4.norm2.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 768,
+      "bytes": 3072
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.4.ffn.layers.0.0",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          1536,
+          384
+        ],
+        [
+          1536
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.4.ffn.layers.0.0.weight",
+        "image_backbone.stages.2.blocks.4.ffn.layers.0.0.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 591360,
+      "bytes": 2365440
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.4.ffn.layers.1",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          384,
+          1536
+        ],
+        [
+          384
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.4.ffn.layers.1.weight",
+        "image_backbone.stages.2.blocks.4.ffn.layers.1.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 590208,
+      "bytes": 2360832
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.5.norm1",
+      "stage": "camera",
+      "operator": "LayerNorm",
+      "tensor_shapes": [
+        [
+          384
+        ],
+        [
+          384
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.5.norm1.weight",
+        "image_backbone.stages.2.blocks.5.norm1.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 768,
+      "bytes": 3072
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.5.attn.w_msa.relative_position_bias_table",
+      "stage": "camera",
+      "operator": "Learned table",
+      "tensor_shapes": [
+        [
+          169,
+          12
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.5.attn.w_msa.relative_position_bias_table"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 2028,
+      "bytes": 8112
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.5.attn.w_msa.relative_position_index",
+      "stage": "camera",
+      "operator": "Buffer",
+      "tensor_shapes": [
+        [
+          49,
+          49
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.5.attn.w_msa.relative_position_index"
+      ],
+      "dtypes": [
+        "int64"
+      ],
+      "elements": 2401,
+      "bytes": 19208
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.5.attn.w_msa.qkv",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          1152,
+          384
+        ],
+        [
+          1152
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.5.attn.w_msa.qkv.weight",
+        "image_backbone.stages.2.blocks.5.attn.w_msa.qkv.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 443520,
+      "bytes": 1774080
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.5.attn.w_msa.proj",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          384,
+          384
+        ],
+        [
+          384
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.5.attn.w_msa.proj.weight",
+        "image_backbone.stages.2.blocks.5.attn.w_msa.proj.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 147840,
+      "bytes": 591360
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.5.norm2",
+      "stage": "camera",
+      "operator": "LayerNorm",
+      "tensor_shapes": [
+        [
+          384
+        ],
+        [
+          384
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.5.norm2.weight",
+        "image_backbone.stages.2.blocks.5.norm2.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 768,
+      "bytes": 3072
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.5.ffn.layers.0.0",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          1536,
+          384
+        ],
+        [
+          1536
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.5.ffn.layers.0.0.weight",
+        "image_backbone.stages.2.blocks.5.ffn.layers.0.0.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 591360,
+      "bytes": 2365440
+    },
+    {
+      "name": "image_backbone.stages.2.blocks.5.ffn.layers.1",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          384,
+          1536
+        ],
+        [
+          384
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.blocks.5.ffn.layers.1.weight",
+        "image_backbone.stages.2.blocks.5.ffn.layers.1.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 590208,
+      "bytes": 2360832
+    },
+    {
+      "name": "image_backbone.stages.2.downsample.norm",
+      "stage": "camera",
+      "operator": "LayerNorm",
+      "tensor_shapes": [
+        [
+          1536
+        ],
+        [
+          1536
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.downsample.norm.weight",
+        "image_backbone.stages.2.downsample.norm.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 3072,
+      "bytes": 12288
+    },
+    {
+      "name": "image_backbone.stages.2.downsample.reduction",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          768,
+          1536
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.2.downsample.reduction.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 1179648,
+      "bytes": 4718592
+    },
+    {
+      "name": "image_backbone.stages.3.blocks.0.norm1",
+      "stage": "camera",
+      "operator": "LayerNorm",
+      "tensor_shapes": [
+        [
+          768
+        ],
+        [
+          768
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.3.blocks.0.norm1.weight",
+        "image_backbone.stages.3.blocks.0.norm1.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 1536,
+      "bytes": 6144
+    },
+    {
+      "name": "image_backbone.stages.3.blocks.0.attn.w_msa.relative_position_bias_table",
+      "stage": "camera",
+      "operator": "Learned table",
+      "tensor_shapes": [
+        [
+          169,
+          24
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.3.blocks.0.attn.w_msa.relative_position_bias_table"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 4056,
+      "bytes": 16224
+    },
+    {
+      "name": "image_backbone.stages.3.blocks.0.attn.w_msa.relative_position_index",
+      "stage": "camera",
+      "operator": "Buffer",
+      "tensor_shapes": [
+        [
+          49,
+          49
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.3.blocks.0.attn.w_msa.relative_position_index"
+      ],
+      "dtypes": [
+        "int64"
+      ],
+      "elements": 2401,
+      "bytes": 19208
+    },
+    {
+      "name": "image_backbone.stages.3.blocks.0.attn.w_msa.qkv",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          2304,
+          768
+        ],
+        [
+          2304
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.3.blocks.0.attn.w_msa.qkv.weight",
+        "image_backbone.stages.3.blocks.0.attn.w_msa.qkv.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 1771776,
+      "bytes": 7087104
+    },
+    {
+      "name": "image_backbone.stages.3.blocks.0.attn.w_msa.proj",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          768,
+          768
+        ],
+        [
+          768
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.3.blocks.0.attn.w_msa.proj.weight",
+        "image_backbone.stages.3.blocks.0.attn.w_msa.proj.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 590592,
+      "bytes": 2362368
+    },
+    {
+      "name": "image_backbone.stages.3.blocks.0.norm2",
+      "stage": "camera",
+      "operator": "LayerNorm",
+      "tensor_shapes": [
+        [
+          768
+        ],
+        [
+          768
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.3.blocks.0.norm2.weight",
+        "image_backbone.stages.3.blocks.0.norm2.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 1536,
+      "bytes": 6144
+    },
+    {
+      "name": "image_backbone.stages.3.blocks.0.ffn.layers.0.0",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          3072,
+          768
+        ],
+        [
+          3072
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.3.blocks.0.ffn.layers.0.0.weight",
+        "image_backbone.stages.3.blocks.0.ffn.layers.0.0.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 2362368,
+      "bytes": 9449472
+    },
+    {
+      "name": "image_backbone.stages.3.blocks.0.ffn.layers.1",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          768,
+          3072
+        ],
+        [
+          768
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.3.blocks.0.ffn.layers.1.weight",
+        "image_backbone.stages.3.blocks.0.ffn.layers.1.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 2360064,
+      "bytes": 9440256
+    },
+    {
+      "name": "image_backbone.stages.3.blocks.1.norm1",
+      "stage": "camera",
+      "operator": "LayerNorm",
+      "tensor_shapes": [
+        [
+          768
+        ],
+        [
+          768
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.3.blocks.1.norm1.weight",
+        "image_backbone.stages.3.blocks.1.norm1.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 1536,
+      "bytes": 6144
+    },
+    {
+      "name": "image_backbone.stages.3.blocks.1.attn.w_msa.relative_position_bias_table",
+      "stage": "camera",
+      "operator": "Learned table",
+      "tensor_shapes": [
+        [
+          169,
+          24
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.3.blocks.1.attn.w_msa.relative_position_bias_table"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 4056,
+      "bytes": 16224
+    },
+    {
+      "name": "image_backbone.stages.3.blocks.1.attn.w_msa.relative_position_index",
+      "stage": "camera",
+      "operator": "Buffer",
+      "tensor_shapes": [
+        [
+          49,
+          49
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.3.blocks.1.attn.w_msa.relative_position_index"
+      ],
+      "dtypes": [
+        "int64"
+      ],
+      "elements": 2401,
+      "bytes": 19208
+    },
+    {
+      "name": "image_backbone.stages.3.blocks.1.attn.w_msa.qkv",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          2304,
+          768
+        ],
+        [
+          2304
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.3.blocks.1.attn.w_msa.qkv.weight",
+        "image_backbone.stages.3.blocks.1.attn.w_msa.qkv.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 1771776,
+      "bytes": 7087104
+    },
+    {
+      "name": "image_backbone.stages.3.blocks.1.attn.w_msa.proj",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          768,
+          768
+        ],
+        [
+          768
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.3.blocks.1.attn.w_msa.proj.weight",
+        "image_backbone.stages.3.blocks.1.attn.w_msa.proj.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 590592,
+      "bytes": 2362368
+    },
+    {
+      "name": "image_backbone.stages.3.blocks.1.norm2",
+      "stage": "camera",
+      "operator": "LayerNorm",
+      "tensor_shapes": [
+        [
+          768
+        ],
+        [
+          768
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.3.blocks.1.norm2.weight",
+        "image_backbone.stages.3.blocks.1.norm2.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 1536,
+      "bytes": 6144
+    },
+    {
+      "name": "image_backbone.stages.3.blocks.1.ffn.layers.0.0",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          3072,
+          768
+        ],
+        [
+          3072
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.3.blocks.1.ffn.layers.0.0.weight",
+        "image_backbone.stages.3.blocks.1.ffn.layers.0.0.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 2362368,
+      "bytes": 9449472
+    },
+    {
+      "name": "image_backbone.stages.3.blocks.1.ffn.layers.1",
+      "stage": "camera",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          768,
+          3072
+        ],
+        [
+          768
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.stages.3.blocks.1.ffn.layers.1.weight",
+        "image_backbone.stages.3.blocks.1.ffn.layers.1.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 2360064,
+      "bytes": 9440256
+    },
+    {
+      "name": "image_backbone.norm1",
+      "stage": "camera",
+      "operator": "LayerNorm",
+      "tensor_shapes": [
+        [
+          192
+        ],
+        [
+          192
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.norm1.weight",
+        "image_backbone.norm1.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 384,
+      "bytes": 1536
+    },
+    {
+      "name": "image_backbone.norm2",
+      "stage": "camera",
+      "operator": "LayerNorm",
+      "tensor_shapes": [
+        [
+          384
+        ],
+        [
+          384
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.norm2.weight",
+        "image_backbone.norm2.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 768,
+      "bytes": 3072
+    },
+    {
+      "name": "image_backbone.norm3",
+      "stage": "camera",
+      "operator": "LayerNorm",
+      "tensor_shapes": [
+        [
+          768
+        ],
+        [
+          768
+        ]
+      ],
+      "tensor_names": [
+        "image_backbone.norm3.weight",
+        "image_backbone.norm3.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 1536,
+      "bytes": 6144
+    },
+    {
+      "name": "neck.lateral_convs.0.conv",
+      "stage": "neck",
+      "operator": "Conv2d",
+      "tensor_shapes": [
+        [
+          256,
+          448,
+          1,
+          1
+        ]
+      ],
+      "tensor_names": [
+        "neck.lateral_convs.0.conv.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 114688,
+      "bytes": 458752
+    },
+    {
+      "name": "neck.lateral_convs.0.bn",
+      "stage": "neck",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          256
+        ],
+        [
+          256
+        ],
+        [
+          256
+        ],
+        [
+          256
+        ]
+      ],
+      "tensor_names": [
+        "neck.lateral_convs.0.bn.weight",
+        "neck.lateral_convs.0.bn.bias",
+        "neck.lateral_convs.0.bn.running_mean",
+        "neck.lateral_convs.0.bn.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 1024,
+      "bytes": 4096
+    },
+    {
+      "name": "neck.lateral_convs.1.conv",
+      "stage": "neck",
+      "operator": "Conv2d",
+      "tensor_shapes": [
+        [
+          256,
+          1152,
+          1,
+          1
+        ]
+      ],
+      "tensor_names": [
+        "neck.lateral_convs.1.conv.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 294912,
+      "bytes": 1179648
+    },
+    {
+      "name": "neck.lateral_convs.1.bn",
+      "stage": "neck",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          256
+        ],
+        [
+          256
+        ],
+        [
+          256
+        ],
+        [
+          256
+        ]
+      ],
+      "tensor_names": [
+        "neck.lateral_convs.1.bn.weight",
+        "neck.lateral_convs.1.bn.bias",
+        "neck.lateral_convs.1.bn.running_mean",
+        "neck.lateral_convs.1.bn.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 1024,
+      "bytes": 4096
+    },
+    {
+      "name": "neck.fpn_convs.0.conv",
+      "stage": "neck",
+      "operator": "Conv2d",
+      "tensor_shapes": [
+        [
+          256,
+          256,
+          3,
+          3
+        ]
+      ],
+      "tensor_names": [
+        "neck.fpn_convs.0.conv.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 589824,
+      "bytes": 2359296
+    },
+    {
+      "name": "neck.fpn_convs.0.bn",
+      "stage": "neck",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          256
+        ],
+        [
+          256
+        ],
+        [
+          256
+        ],
+        [
+          256
+        ]
+      ],
+      "tensor_names": [
+        "neck.fpn_convs.0.bn.weight",
+        "neck.fpn_convs.0.bn.bias",
+        "neck.fpn_convs.0.bn.running_mean",
+        "neck.fpn_convs.0.bn.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 1024,
+      "bytes": 4096
+    },
+    {
+      "name": "neck.fpn_convs.1.conv",
+      "stage": "neck",
+      "operator": "Conv2d",
+      "tensor_shapes": [
+        [
+          256,
+          256,
+          3,
+          3
+        ]
+      ],
+      "tensor_names": [
+        "neck.fpn_convs.1.conv.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 589824,
+      "bytes": 2359296
+    },
+    {
+      "name": "neck.fpn_convs.1.bn",
+      "stage": "neck",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          256
+        ],
+        [
+          256
+        ],
+        [
+          256
+        ],
+        [
+          256
+        ]
+      ],
+      "tensor_names": [
+        "neck.fpn_convs.1.bn.weight",
+        "neck.fpn_convs.1.bn.bias",
+        "neck.fpn_convs.1.bn.running_mean",
+        "neck.fpn_convs.1.bn.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 1024,
+      "bytes": 4096
+    },
+    {
+      "name": "vtransform.dx",
+      "stage": "depth",
+      "operator": "Buffer",
+      "tensor_shapes": [
+        [
+          3
+        ]
+      ],
+      "tensor_names": [
+        "vtransform.dx"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 3,
+      "bytes": 12
+    },
+    {
+      "name": "vtransform.bx",
+      "stage": "depth",
+      "operator": "Buffer",
+      "tensor_shapes": [
+        [
+          3
+        ]
+      ],
+      "tensor_names": [
+        "vtransform.bx"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 3,
+      "bytes": 12
+    },
+    {
+      "name": "vtransform.nx",
+      "stage": "depth",
+      "operator": "Buffer",
+      "tensor_shapes": [
+        [
+          3
+        ]
+      ],
+      "tensor_names": [
+        "vtransform.nx"
+      ],
+      "dtypes": [
+        "int64"
+      ],
+      "elements": 3,
+      "bytes": 24
+    },
+    {
+      "name": "vtransform.frustum",
+      "stage": "depth",
+      "operator": "Buffer",
+      "tensor_shapes": [
+        [
+          118,
+          32,
+          88,
+          3
+        ]
+      ],
+      "tensor_names": [
+        "vtransform.frustum"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 996864,
+      "bytes": 3987456
+    },
+    {
+      "name": "vtransform.dtransform.0",
+      "stage": "depth",
+      "operator": "Conv2d",
+      "tensor_shapes": [
+        [
+          8,
+          1,
+          1,
+          1
+        ],
+        [
+          8
+        ]
+      ],
+      "tensor_names": [
+        "vtransform.dtransform.0.weight",
+        "vtransform.dtransform.0.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 16,
+      "bytes": 64
+    },
+    {
+      "name": "vtransform.dtransform.1",
+      "stage": "depth",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          8
+        ],
+        [
+          8
+        ],
+        [
+          8
+        ],
+        [
+          8
+        ]
+      ],
+      "tensor_names": [
+        "vtransform.dtransform.1.weight",
+        "vtransform.dtransform.1.bias",
+        "vtransform.dtransform.1.running_mean",
+        "vtransform.dtransform.1.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 32,
+      "bytes": 128
+    },
+    {
+      "name": "vtransform.dtransform.3",
+      "stage": "depth",
+      "operator": "Conv2d",
+      "tensor_shapes": [
+        [
+          32,
+          8,
+          5,
+          5
+        ],
+        [
+          32
+        ]
+      ],
+      "tensor_names": [
+        "vtransform.dtransform.3.weight",
+        "vtransform.dtransform.3.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 6432,
+      "bytes": 25728
+    },
+    {
+      "name": "vtransform.dtransform.4",
+      "stage": "depth",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          32
+        ],
+        [
+          32
+        ],
+        [
+          32
+        ],
+        [
+          32
+        ]
+      ],
+      "tensor_names": [
+        "vtransform.dtransform.4.weight",
+        "vtransform.dtransform.4.bias",
+        "vtransform.dtransform.4.running_mean",
+        "vtransform.dtransform.4.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 128,
+      "bytes": 512
+    },
+    {
+      "name": "vtransform.dtransform.6",
+      "stage": "depth",
+      "operator": "Conv2d",
+      "tensor_shapes": [
+        [
+          64,
+          32,
+          5,
+          5
+        ],
+        [
+          64
+        ]
+      ],
+      "tensor_names": [
+        "vtransform.dtransform.6.weight",
+        "vtransform.dtransform.6.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 51264,
+      "bytes": 205056
+    },
+    {
+      "name": "vtransform.dtransform.7",
+      "stage": "depth",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          64
+        ],
+        [
+          64
+        ],
+        [
+          64
+        ],
+        [
+          64
+        ]
+      ],
+      "tensor_names": [
+        "vtransform.dtransform.7.weight",
+        "vtransform.dtransform.7.bias",
+        "vtransform.dtransform.7.running_mean",
+        "vtransform.dtransform.7.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 256,
+      "bytes": 1024
+    },
+    {
+      "name": "vtransform.depthnet.0",
+      "stage": "depth",
+      "operator": "Conv2d",
+      "tensor_shapes": [
+        [
+          256,
+          320,
+          3,
+          3
+        ],
+        [
+          256
+        ]
+      ],
+      "tensor_names": [
+        "vtransform.depthnet.0.weight",
+        "vtransform.depthnet.0.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 737536,
+      "bytes": 2950144
+    },
+    {
+      "name": "vtransform.depthnet.1",
+      "stage": "depth",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          256
+        ],
+        [
+          256
+        ],
+        [
+          256
+        ],
+        [
+          256
+        ]
+      ],
+      "tensor_names": [
+        "vtransform.depthnet.1.weight",
+        "vtransform.depthnet.1.bias",
+        "vtransform.depthnet.1.running_mean",
+        "vtransform.depthnet.1.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 1024,
+      "bytes": 4096
+    },
+    {
+      "name": "vtransform.depthnet.3",
+      "stage": "depth",
+      "operator": "Conv2d",
+      "tensor_shapes": [
+        [
+          256,
+          256,
+          3,
+          3
+        ],
+        [
+          256
+        ]
+      ],
+      "tensor_names": [
+        "vtransform.depthnet.3.weight",
+        "vtransform.depthnet.3.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 590080,
+      "bytes": 2360320
+    },
+    {
+      "name": "vtransform.depthnet.4",
+      "stage": "depth",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          256
+        ],
+        [
+          256
+        ],
+        [
+          256
+        ],
+        [
+          256
+        ]
+      ],
+      "tensor_names": [
+        "vtransform.depthnet.4.weight",
+        "vtransform.depthnet.4.bias",
+        "vtransform.depthnet.4.running_mean",
+        "vtransform.depthnet.4.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 1024,
+      "bytes": 4096
+    },
+    {
+      "name": "vtransform.depthnet.6",
+      "stage": "depth",
+      "operator": "Conv2d",
+      "tensor_shapes": [
+        [
+          198,
+          256,
+          1,
+          1
+        ],
+        [
+          198
+        ]
+      ],
+      "tensor_names": [
+        "vtransform.depthnet.6.weight",
+        "vtransform.depthnet.6.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 50886,
+      "bytes": 203544
+    },
+    {
+      "name": "vtransform.downsample.0",
+      "stage": "depth",
+      "operator": "Conv2d",
+      "tensor_shapes": [
+        [
+          80,
+          80,
+          3,
+          3
+        ]
+      ],
+      "tensor_names": [
+        "vtransform.downsample.0.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 57600,
+      "bytes": 230400
+    },
+    {
+      "name": "vtransform.downsample.1",
+      "stage": "depth",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          80
+        ],
+        [
+          80
+        ],
+        [
+          80
+        ],
+        [
+          80
+        ]
+      ],
+      "tensor_names": [
+        "vtransform.downsample.1.weight",
+        "vtransform.downsample.1.bias",
+        "vtransform.downsample.1.running_mean",
+        "vtransform.downsample.1.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 320,
+      "bytes": 1280
+    },
+    {
+      "name": "vtransform.downsample.3",
+      "stage": "depth",
+      "operator": "Conv2d",
+      "tensor_shapes": [
+        [
+          80,
+          80,
+          3,
+          3
+        ]
+      ],
+      "tensor_names": [
+        "vtransform.downsample.3.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 57600,
+      "bytes": 230400
+    },
+    {
+      "name": "vtransform.downsample.4",
+      "stage": "depth",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          80
+        ],
+        [
+          80
+        ],
+        [
+          80
+        ],
+        [
+          80
+        ]
+      ],
+      "tensor_names": [
+        "vtransform.downsample.4.weight",
+        "vtransform.downsample.4.bias",
+        "vtransform.downsample.4.running_mean",
+        "vtransform.downsample.4.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 320,
+      "bytes": 1280
+    },
+    {
+      "name": "vtransform.downsample.6",
+      "stage": "depth",
+      "operator": "Conv2d",
+      "tensor_shapes": [
+        [
+          80,
+          80,
+          3,
+          3
+        ]
+      ],
+      "tensor_names": [
+        "vtransform.downsample.6.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 57600,
+      "bytes": 230400
+    },
+    {
+      "name": "vtransform.downsample.7",
+      "stage": "depth",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          80
+        ],
+        [
+          80
+        ],
+        [
+          80
+        ],
+        [
+          80
+        ]
+      ],
+      "tensor_names": [
+        "vtransform.downsample.7.weight",
+        "vtransform.downsample.7.bias",
+        "vtransform.downsample.7.running_mean",
+        "vtransform.downsample.7.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 320,
+      "bytes": 1280
+    },
+    {
+      "name": "backbone_3d.conv_input.0",
+      "stage": "lidar",
+      "operator": "SparseConv3d",
+      "tensor_shapes": [
+        [
+          3,
+          3,
+          3,
+          5,
+          16
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv_input.0.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 2160,
+      "bytes": 8640
+    },
+    {
+      "name": "backbone_3d.conv_input.1",
+      "stage": "lidar",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          16
+        ],
+        [
+          16
+        ],
+        [
+          16
+        ],
+        [
+          16
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv_input.1.weight",
+        "backbone_3d.conv_input.1.bias",
+        "backbone_3d.conv_input.1.running_mean",
+        "backbone_3d.conv_input.1.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 64,
+      "bytes": 256
+    },
+    {
+      "name": "backbone_3d.conv1.0.conv1",
+      "stage": "lidar",
+      "operator": "SparseConv3d",
+      "tensor_shapes": [
+        [
+          3,
+          3,
+          3,
+          16,
+          16
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv1.0.conv1.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 6912,
+      "bytes": 27648
+    },
+    {
+      "name": "backbone_3d.conv1.0.bn1",
+      "stage": "lidar",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          16
+        ],
+        [
+          16
+        ],
+        [
+          16
+        ],
+        [
+          16
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv1.0.bn1.weight",
+        "backbone_3d.conv1.0.bn1.bias",
+        "backbone_3d.conv1.0.bn1.running_mean",
+        "backbone_3d.conv1.0.bn1.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 64,
+      "bytes": 256
+    },
+    {
+      "name": "backbone_3d.conv1.0.conv2",
+      "stage": "lidar",
+      "operator": "SparseConv3d",
+      "tensor_shapes": [
+        [
+          3,
+          3,
+          3,
+          16,
+          16
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv1.0.conv2.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 6912,
+      "bytes": 27648
+    },
+    {
+      "name": "backbone_3d.conv1.0.bn2",
+      "stage": "lidar",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          16
+        ],
+        [
+          16
+        ],
+        [
+          16
+        ],
+        [
+          16
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv1.0.bn2.weight",
+        "backbone_3d.conv1.0.bn2.bias",
+        "backbone_3d.conv1.0.bn2.running_mean",
+        "backbone_3d.conv1.0.bn2.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 64,
+      "bytes": 256
+    },
+    {
+      "name": "backbone_3d.conv1.1.conv1",
+      "stage": "lidar",
+      "operator": "SparseConv3d",
+      "tensor_shapes": [
+        [
+          3,
+          3,
+          3,
+          16,
+          16
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv1.1.conv1.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 6912,
+      "bytes": 27648
+    },
+    {
+      "name": "backbone_3d.conv1.1.bn1",
+      "stage": "lidar",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          16
+        ],
+        [
+          16
+        ],
+        [
+          16
+        ],
+        [
+          16
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv1.1.bn1.weight",
+        "backbone_3d.conv1.1.bn1.bias",
+        "backbone_3d.conv1.1.bn1.running_mean",
+        "backbone_3d.conv1.1.bn1.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 64,
+      "bytes": 256
+    },
+    {
+      "name": "backbone_3d.conv1.1.conv2",
+      "stage": "lidar",
+      "operator": "SparseConv3d",
+      "tensor_shapes": [
+        [
+          3,
+          3,
+          3,
+          16,
+          16
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv1.1.conv2.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 6912,
+      "bytes": 27648
+    },
+    {
+      "name": "backbone_3d.conv1.1.bn2",
+      "stage": "lidar",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          16
+        ],
+        [
+          16
+        ],
+        [
+          16
+        ],
+        [
+          16
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv1.1.bn2.weight",
+        "backbone_3d.conv1.1.bn2.bias",
+        "backbone_3d.conv1.1.bn2.running_mean",
+        "backbone_3d.conv1.1.bn2.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 64,
+      "bytes": 256
+    },
+    {
+      "name": "backbone_3d.conv2.0.0",
+      "stage": "lidar",
+      "operator": "SparseConv3d",
+      "tensor_shapes": [
+        [
+          3,
+          3,
+          3,
+          16,
+          32
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv2.0.0.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 13824,
+      "bytes": 55296
+    },
+    {
+      "name": "backbone_3d.conv2.0.1",
+      "stage": "lidar",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          32
+        ],
+        [
+          32
+        ],
+        [
+          32
+        ],
+        [
+          32
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv2.0.1.weight",
+        "backbone_3d.conv2.0.1.bias",
+        "backbone_3d.conv2.0.1.running_mean",
+        "backbone_3d.conv2.0.1.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 128,
+      "bytes": 512
+    },
+    {
+      "name": "backbone_3d.conv2.1.conv1",
+      "stage": "lidar",
+      "operator": "SparseConv3d",
+      "tensor_shapes": [
+        [
+          3,
+          3,
+          3,
+          32,
+          32
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv2.1.conv1.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 27648,
+      "bytes": 110592
+    },
+    {
+      "name": "backbone_3d.conv2.1.bn1",
+      "stage": "lidar",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          32
+        ],
+        [
+          32
+        ],
+        [
+          32
+        ],
+        [
+          32
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv2.1.bn1.weight",
+        "backbone_3d.conv2.1.bn1.bias",
+        "backbone_3d.conv2.1.bn1.running_mean",
+        "backbone_3d.conv2.1.bn1.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 128,
+      "bytes": 512
+    },
+    {
+      "name": "backbone_3d.conv2.1.conv2",
+      "stage": "lidar",
+      "operator": "SparseConv3d",
+      "tensor_shapes": [
+        [
+          3,
+          3,
+          3,
+          32,
+          32
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv2.1.conv2.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 27648,
+      "bytes": 110592
+    },
+    {
+      "name": "backbone_3d.conv2.1.bn2",
+      "stage": "lidar",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          32
+        ],
+        [
+          32
+        ],
+        [
+          32
+        ],
+        [
+          32
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv2.1.bn2.weight",
+        "backbone_3d.conv2.1.bn2.bias",
+        "backbone_3d.conv2.1.bn2.running_mean",
+        "backbone_3d.conv2.1.bn2.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 128,
+      "bytes": 512
+    },
+    {
+      "name": "backbone_3d.conv2.2.conv1",
+      "stage": "lidar",
+      "operator": "SparseConv3d",
+      "tensor_shapes": [
+        [
+          3,
+          3,
+          3,
+          32,
+          32
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv2.2.conv1.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 27648,
+      "bytes": 110592
+    },
+    {
+      "name": "backbone_3d.conv2.2.bn1",
+      "stage": "lidar",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          32
+        ],
+        [
+          32
+        ],
+        [
+          32
+        ],
+        [
+          32
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv2.2.bn1.weight",
+        "backbone_3d.conv2.2.bn1.bias",
+        "backbone_3d.conv2.2.bn1.running_mean",
+        "backbone_3d.conv2.2.bn1.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 128,
+      "bytes": 512
+    },
+    {
+      "name": "backbone_3d.conv2.2.conv2",
+      "stage": "lidar",
+      "operator": "SparseConv3d",
+      "tensor_shapes": [
+        [
+          3,
+          3,
+          3,
+          32,
+          32
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv2.2.conv2.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 27648,
+      "bytes": 110592
+    },
+    {
+      "name": "backbone_3d.conv2.2.bn2",
+      "stage": "lidar",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          32
+        ],
+        [
+          32
+        ],
+        [
+          32
+        ],
+        [
+          32
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv2.2.bn2.weight",
+        "backbone_3d.conv2.2.bn2.bias",
+        "backbone_3d.conv2.2.bn2.running_mean",
+        "backbone_3d.conv2.2.bn2.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 128,
+      "bytes": 512
+    },
+    {
+      "name": "backbone_3d.conv3.0.0",
+      "stage": "lidar",
+      "operator": "SparseConv3d",
+      "tensor_shapes": [
+        [
+          3,
+          3,
+          3,
+          32,
+          64
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv3.0.0.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 55296,
+      "bytes": 221184
+    },
+    {
+      "name": "backbone_3d.conv3.0.1",
+      "stage": "lidar",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          64
+        ],
+        [
+          64
+        ],
+        [
+          64
+        ],
+        [
+          64
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv3.0.1.weight",
+        "backbone_3d.conv3.0.1.bias",
+        "backbone_3d.conv3.0.1.running_mean",
+        "backbone_3d.conv3.0.1.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 256,
+      "bytes": 1024
+    },
+    {
+      "name": "backbone_3d.conv3.1.conv1",
+      "stage": "lidar",
+      "operator": "SparseConv3d",
+      "tensor_shapes": [
+        [
+          3,
+          3,
+          3,
+          64,
+          64
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv3.1.conv1.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 110592,
+      "bytes": 442368
+    },
+    {
+      "name": "backbone_3d.conv3.1.bn1",
+      "stage": "lidar",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          64
+        ],
+        [
+          64
+        ],
+        [
+          64
+        ],
+        [
+          64
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv3.1.bn1.weight",
+        "backbone_3d.conv3.1.bn1.bias",
+        "backbone_3d.conv3.1.bn1.running_mean",
+        "backbone_3d.conv3.1.bn1.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 256,
+      "bytes": 1024
+    },
+    {
+      "name": "backbone_3d.conv3.1.conv2",
+      "stage": "lidar",
+      "operator": "SparseConv3d",
+      "tensor_shapes": [
+        [
+          3,
+          3,
+          3,
+          64,
+          64
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv3.1.conv2.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 110592,
+      "bytes": 442368
+    },
+    {
+      "name": "backbone_3d.conv3.1.bn2",
+      "stage": "lidar",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          64
+        ],
+        [
+          64
+        ],
+        [
+          64
+        ],
+        [
+          64
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv3.1.bn2.weight",
+        "backbone_3d.conv3.1.bn2.bias",
+        "backbone_3d.conv3.1.bn2.running_mean",
+        "backbone_3d.conv3.1.bn2.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 256,
+      "bytes": 1024
+    },
+    {
+      "name": "backbone_3d.conv3.2.conv1",
+      "stage": "lidar",
+      "operator": "SparseConv3d",
+      "tensor_shapes": [
+        [
+          3,
+          3,
+          3,
+          64,
+          64
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv3.2.conv1.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 110592,
+      "bytes": 442368
+    },
+    {
+      "name": "backbone_3d.conv3.2.bn1",
+      "stage": "lidar",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          64
+        ],
+        [
+          64
+        ],
+        [
+          64
+        ],
+        [
+          64
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv3.2.bn1.weight",
+        "backbone_3d.conv3.2.bn1.bias",
+        "backbone_3d.conv3.2.bn1.running_mean",
+        "backbone_3d.conv3.2.bn1.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 256,
+      "bytes": 1024
+    },
+    {
+      "name": "backbone_3d.conv3.2.conv2",
+      "stage": "lidar",
+      "operator": "SparseConv3d",
+      "tensor_shapes": [
+        [
+          3,
+          3,
+          3,
+          64,
+          64
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv3.2.conv2.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 110592,
+      "bytes": 442368
+    },
+    {
+      "name": "backbone_3d.conv3.2.bn2",
+      "stage": "lidar",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          64
+        ],
+        [
+          64
+        ],
+        [
+          64
+        ],
+        [
+          64
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv3.2.bn2.weight",
+        "backbone_3d.conv3.2.bn2.bias",
+        "backbone_3d.conv3.2.bn2.running_mean",
+        "backbone_3d.conv3.2.bn2.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 256,
+      "bytes": 1024
+    },
+    {
+      "name": "backbone_3d.conv4.0.0",
+      "stage": "lidar",
+      "operator": "SparseConv3d",
+      "tensor_shapes": [
+        [
+          3,
+          3,
+          3,
+          64,
+          128
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv4.0.0.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 221184,
+      "bytes": 884736
+    },
+    {
+      "name": "backbone_3d.conv4.0.1",
+      "stage": "lidar",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          128
+        ],
+        [
+          128
+        ],
+        [
+          128
+        ],
+        [
+          128
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv4.0.1.weight",
+        "backbone_3d.conv4.0.1.bias",
+        "backbone_3d.conv4.0.1.running_mean",
+        "backbone_3d.conv4.0.1.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 512,
+      "bytes": 2048
+    },
+    {
+      "name": "backbone_3d.conv4.1.conv1",
+      "stage": "lidar",
+      "operator": "SparseConv3d",
+      "tensor_shapes": [
+        [
+          3,
+          3,
+          3,
+          128,
+          128
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv4.1.conv1.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 442368,
+      "bytes": 1769472
+    },
+    {
+      "name": "backbone_3d.conv4.1.bn1",
+      "stage": "lidar",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          128
+        ],
+        [
+          128
+        ],
+        [
+          128
+        ],
+        [
+          128
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv4.1.bn1.weight",
+        "backbone_3d.conv4.1.bn1.bias",
+        "backbone_3d.conv4.1.bn1.running_mean",
+        "backbone_3d.conv4.1.bn1.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 512,
+      "bytes": 2048
+    },
+    {
+      "name": "backbone_3d.conv4.1.conv2",
+      "stage": "lidar",
+      "operator": "SparseConv3d",
+      "tensor_shapes": [
+        [
+          3,
+          3,
+          3,
+          128,
+          128
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv4.1.conv2.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 442368,
+      "bytes": 1769472
+    },
+    {
+      "name": "backbone_3d.conv4.1.bn2",
+      "stage": "lidar",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          128
+        ],
+        [
+          128
+        ],
+        [
+          128
+        ],
+        [
+          128
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv4.1.bn2.weight",
+        "backbone_3d.conv4.1.bn2.bias",
+        "backbone_3d.conv4.1.bn2.running_mean",
+        "backbone_3d.conv4.1.bn2.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 512,
+      "bytes": 2048
+    },
+    {
+      "name": "backbone_3d.conv4.2.conv1",
+      "stage": "lidar",
+      "operator": "SparseConv3d",
+      "tensor_shapes": [
+        [
+          3,
+          3,
+          3,
+          128,
+          128
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv4.2.conv1.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 442368,
+      "bytes": 1769472
+    },
+    {
+      "name": "backbone_3d.conv4.2.bn1",
+      "stage": "lidar",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          128
+        ],
+        [
+          128
+        ],
+        [
+          128
+        ],
+        [
+          128
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv4.2.bn1.weight",
+        "backbone_3d.conv4.2.bn1.bias",
+        "backbone_3d.conv4.2.bn1.running_mean",
+        "backbone_3d.conv4.2.bn1.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 512,
+      "bytes": 2048
+    },
+    {
+      "name": "backbone_3d.conv4.2.conv2",
+      "stage": "lidar",
+      "operator": "SparseConv3d",
+      "tensor_shapes": [
+        [
+          3,
+          3,
+          3,
+          128,
+          128
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv4.2.conv2.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 442368,
+      "bytes": 1769472
+    },
+    {
+      "name": "backbone_3d.conv4.2.bn2",
+      "stage": "lidar",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          128
+        ],
+        [
+          128
+        ],
+        [
+          128
+        ],
+        [
+          128
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv4.2.bn2.weight",
+        "backbone_3d.conv4.2.bn2.bias",
+        "backbone_3d.conv4.2.bn2.running_mean",
+        "backbone_3d.conv4.2.bn2.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 512,
+      "bytes": 2048
+    },
+    {
+      "name": "backbone_3d.conv_out.0",
+      "stage": "lidar",
+      "operator": "SparseConv3d",
+      "tensor_shapes": [
+        [
+          3,
+          1,
+          1,
+          128,
+          128
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv_out.0.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 49152,
+      "bytes": 196608
+    },
+    {
+      "name": "backbone_3d.conv_out.1",
+      "stage": "lidar",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          128
+        ],
+        [
+          128
+        ],
+        [
+          128
+        ],
+        [
+          128
+        ]
+      ],
+      "tensor_names": [
+        "backbone_3d.conv_out.1.weight",
+        "backbone_3d.conv_out.1.bias",
+        "backbone_3d.conv_out.1.running_mean",
+        "backbone_3d.conv_out.1.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 512,
+      "bytes": 2048
+    },
+    {
+      "name": "fuser.conv.0",
+      "stage": "fusion",
+      "operator": "Conv2d",
+      "tensor_shapes": [
+        [
+          256,
+          336,
+          3,
+          3
+        ]
+      ],
+      "tensor_names": [
+        "fuser.conv.0.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 774144,
+      "bytes": 3096576
+    },
+    {
+      "name": "fuser.conv.1",
+      "stage": "fusion",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          256
+        ],
+        [
+          256
+        ],
+        [
+          256
+        ],
+        [
+          256
+        ]
+      ],
+      "tensor_names": [
+        "fuser.conv.1.weight",
+        "fuser.conv.1.bias",
+        "fuser.conv.1.running_mean",
+        "fuser.conv.1.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 1024,
+      "bytes": 4096
+    },
+    {
+      "name": "backbone_2d.blocks.0.1",
+      "stage": "bev",
+      "operator": "Conv2d",
+      "tensor_shapes": [
+        [
+          128,
+          256,
+          3,
+          3
+        ]
+      ],
+      "tensor_names": [
+        "backbone_2d.blocks.0.1.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 294912,
+      "bytes": 1179648
+    },
+    {
+      "name": "backbone_2d.blocks.0.2",
+      "stage": "bev",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          128
+        ],
+        [
+          128
+        ],
+        [
+          128
+        ],
+        [
+          128
+        ]
+      ],
+      "tensor_names": [
+        "backbone_2d.blocks.0.2.weight",
+        "backbone_2d.blocks.0.2.bias",
+        "backbone_2d.blocks.0.2.running_mean",
+        "backbone_2d.blocks.0.2.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 512,
+      "bytes": 2048
+    },
+    {
+      "name": "backbone_2d.blocks.0.4",
+      "stage": "bev",
+      "operator": "Conv2d",
+      "tensor_shapes": [
+        [
+          128,
+          128,
+          3,
+          3
+        ]
+      ],
+      "tensor_names": [
+        "backbone_2d.blocks.0.4.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 147456,
+      "bytes": 589824
+    },
+    {
+      "name": "backbone_2d.blocks.0.5",
+      "stage": "bev",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          128
+        ],
+        [
+          128
+        ],
+        [
+          128
+        ],
+        [
+          128
+        ]
+      ],
+      "tensor_names": [
+        "backbone_2d.blocks.0.5.weight",
+        "backbone_2d.blocks.0.5.bias",
+        "backbone_2d.blocks.0.5.running_mean",
+        "backbone_2d.blocks.0.5.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 512,
+      "bytes": 2048
+    },
+    {
+      "name": "backbone_2d.blocks.0.7",
+      "stage": "bev",
+      "operator": "Conv2d",
+      "tensor_shapes": [
+        [
+          128,
+          128,
+          3,
+          3
+        ]
+      ],
+      "tensor_names": [
+        "backbone_2d.blocks.0.7.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 147456,
+      "bytes": 589824
+    },
+    {
+      "name": "backbone_2d.blocks.0.8",
+      "stage": "bev",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          128
+        ],
+        [
+          128
+        ],
+        [
+          128
+        ],
+        [
+          128
+        ]
+      ],
+      "tensor_names": [
+        "backbone_2d.blocks.0.8.weight",
+        "backbone_2d.blocks.0.8.bias",
+        "backbone_2d.blocks.0.8.running_mean",
+        "backbone_2d.blocks.0.8.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 512,
+      "bytes": 2048
+    },
+    {
+      "name": "backbone_2d.blocks.0.10",
+      "stage": "bev",
+      "operator": "Conv2d",
+      "tensor_shapes": [
+        [
+          128,
+          128,
+          3,
+          3
+        ]
+      ],
+      "tensor_names": [
+        "backbone_2d.blocks.0.10.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 147456,
+      "bytes": 589824
+    },
+    {
+      "name": "backbone_2d.blocks.0.11",
+      "stage": "bev",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          128
+        ],
+        [
+          128
+        ],
+        [
+          128
+        ],
+        [
+          128
+        ]
+      ],
+      "tensor_names": [
+        "backbone_2d.blocks.0.11.weight",
+        "backbone_2d.blocks.0.11.bias",
+        "backbone_2d.blocks.0.11.running_mean",
+        "backbone_2d.blocks.0.11.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 512,
+      "bytes": 2048
+    },
+    {
+      "name": "backbone_2d.blocks.0.13",
+      "stage": "bev",
+      "operator": "Conv2d",
+      "tensor_shapes": [
+        [
+          128,
+          128,
+          3,
+          3
+        ]
+      ],
+      "tensor_names": [
+        "backbone_2d.blocks.0.13.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 147456,
+      "bytes": 589824
+    },
+    {
+      "name": "backbone_2d.blocks.0.14",
+      "stage": "bev",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          128
+        ],
+        [
+          128
+        ],
+        [
+          128
+        ],
+        [
+          128
+        ]
+      ],
+      "tensor_names": [
+        "backbone_2d.blocks.0.14.weight",
+        "backbone_2d.blocks.0.14.bias",
+        "backbone_2d.blocks.0.14.running_mean",
+        "backbone_2d.blocks.0.14.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 512,
+      "bytes": 2048
+    },
+    {
+      "name": "backbone_2d.blocks.0.16",
+      "stage": "bev",
+      "operator": "Conv2d",
+      "tensor_shapes": [
+        [
+          128,
+          128,
+          3,
+          3
+        ]
+      ],
+      "tensor_names": [
+        "backbone_2d.blocks.0.16.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 147456,
+      "bytes": 589824
+    },
+    {
+      "name": "backbone_2d.blocks.0.17",
+      "stage": "bev",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          128
+        ],
+        [
+          128
+        ],
+        [
+          128
+        ],
+        [
+          128
+        ]
+      ],
+      "tensor_names": [
+        "backbone_2d.blocks.0.17.weight",
+        "backbone_2d.blocks.0.17.bias",
+        "backbone_2d.blocks.0.17.running_mean",
+        "backbone_2d.blocks.0.17.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 512,
+      "bytes": 2048
+    },
+    {
+      "name": "backbone_2d.blocks.1.1",
+      "stage": "bev",
+      "operator": "Conv2d",
+      "tensor_shapes": [
+        [
+          256,
+          128,
+          3,
+          3
+        ]
+      ],
+      "tensor_names": [
+        "backbone_2d.blocks.1.1.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 294912,
+      "bytes": 1179648
+    },
+    {
+      "name": "backbone_2d.blocks.1.2",
+      "stage": "bev",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          256
+        ],
+        [
+          256
+        ],
+        [
+          256
+        ],
+        [
+          256
+        ]
+      ],
+      "tensor_names": [
+        "backbone_2d.blocks.1.2.weight",
+        "backbone_2d.blocks.1.2.bias",
+        "backbone_2d.blocks.1.2.running_mean",
+        "backbone_2d.blocks.1.2.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 1024,
+      "bytes": 4096
+    },
+    {
+      "name": "backbone_2d.blocks.1.4",
+      "stage": "bev",
+      "operator": "Conv2d",
+      "tensor_shapes": [
+        [
+          256,
+          256,
+          3,
+          3
+        ]
+      ],
+      "tensor_names": [
+        "backbone_2d.blocks.1.4.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 589824,
+      "bytes": 2359296
+    },
+    {
+      "name": "backbone_2d.blocks.1.5",
+      "stage": "bev",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          256
+        ],
+        [
+          256
+        ],
+        [
+          256
+        ],
+        [
+          256
+        ]
+      ],
+      "tensor_names": [
+        "backbone_2d.blocks.1.5.weight",
+        "backbone_2d.blocks.1.5.bias",
+        "backbone_2d.blocks.1.5.running_mean",
+        "backbone_2d.blocks.1.5.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 1024,
+      "bytes": 4096
+    },
+    {
+      "name": "backbone_2d.blocks.1.7",
+      "stage": "bev",
+      "operator": "Conv2d",
+      "tensor_shapes": [
+        [
+          256,
+          256,
+          3,
+          3
+        ]
+      ],
+      "tensor_names": [
+        "backbone_2d.blocks.1.7.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 589824,
+      "bytes": 2359296
+    },
+    {
+      "name": "backbone_2d.blocks.1.8",
+      "stage": "bev",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          256
+        ],
+        [
+          256
+        ],
+        [
+          256
+        ],
+        [
+          256
+        ]
+      ],
+      "tensor_names": [
+        "backbone_2d.blocks.1.8.weight",
+        "backbone_2d.blocks.1.8.bias",
+        "backbone_2d.blocks.1.8.running_mean",
+        "backbone_2d.blocks.1.8.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 1024,
+      "bytes": 4096
+    },
+    {
+      "name": "backbone_2d.blocks.1.10",
+      "stage": "bev",
+      "operator": "Conv2d",
+      "tensor_shapes": [
+        [
+          256,
+          256,
+          3,
+          3
+        ]
+      ],
+      "tensor_names": [
+        "backbone_2d.blocks.1.10.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 589824,
+      "bytes": 2359296
+    },
+    {
+      "name": "backbone_2d.blocks.1.11",
+      "stage": "bev",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          256
+        ],
+        [
+          256
+        ],
+        [
+          256
+        ],
+        [
+          256
+        ]
+      ],
+      "tensor_names": [
+        "backbone_2d.blocks.1.11.weight",
+        "backbone_2d.blocks.1.11.bias",
+        "backbone_2d.blocks.1.11.running_mean",
+        "backbone_2d.blocks.1.11.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 1024,
+      "bytes": 4096
+    },
+    {
+      "name": "backbone_2d.blocks.1.13",
+      "stage": "bev",
+      "operator": "Conv2d",
+      "tensor_shapes": [
+        [
+          256,
+          256,
+          3,
+          3
+        ]
+      ],
+      "tensor_names": [
+        "backbone_2d.blocks.1.13.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 589824,
+      "bytes": 2359296
+    },
+    {
+      "name": "backbone_2d.blocks.1.14",
+      "stage": "bev",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          256
+        ],
+        [
+          256
+        ],
+        [
+          256
+        ],
+        [
+          256
+        ]
+      ],
+      "tensor_names": [
+        "backbone_2d.blocks.1.14.weight",
+        "backbone_2d.blocks.1.14.bias",
+        "backbone_2d.blocks.1.14.running_mean",
+        "backbone_2d.blocks.1.14.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 1024,
+      "bytes": 4096
+    },
+    {
+      "name": "backbone_2d.blocks.1.16",
+      "stage": "bev",
+      "operator": "Conv2d",
+      "tensor_shapes": [
+        [
+          256,
+          256,
+          3,
+          3
+        ]
+      ],
+      "tensor_names": [
+        "backbone_2d.blocks.1.16.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 589824,
+      "bytes": 2359296
+    },
+    {
+      "name": "backbone_2d.blocks.1.17",
+      "stage": "bev",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          256
+        ],
+        [
+          256
+        ],
+        [
+          256
+        ],
+        [
+          256
+        ]
+      ],
+      "tensor_names": [
+        "backbone_2d.blocks.1.17.weight",
+        "backbone_2d.blocks.1.17.bias",
+        "backbone_2d.blocks.1.17.running_mean",
+        "backbone_2d.blocks.1.17.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 1024,
+      "bytes": 4096
+    },
+    {
+      "name": "backbone_2d.deblocks.0.0",
+      "stage": "bev",
+      "operator": "ConvTranspose2d",
+      "tensor_shapes": [
+        [
+          256,
+          128,
+          1,
+          1
+        ]
+      ],
+      "tensor_names": [
+        "backbone_2d.deblocks.0.0.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 32768,
+      "bytes": 131072
+    },
+    {
+      "name": "backbone_2d.deblocks.0.1",
+      "stage": "bev",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          256
+        ],
+        [
+          256
+        ],
+        [
+          256
+        ],
+        [
+          256
+        ]
+      ],
+      "tensor_names": [
+        "backbone_2d.deblocks.0.1.weight",
+        "backbone_2d.deblocks.0.1.bias",
+        "backbone_2d.deblocks.0.1.running_mean",
+        "backbone_2d.deblocks.0.1.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 1024,
+      "bytes": 4096
+    },
+    {
+      "name": "backbone_2d.deblocks.1.0",
+      "stage": "bev",
+      "operator": "ConvTranspose2d",
+      "tensor_shapes": [
+        [
+          256,
+          256,
+          2,
+          2
+        ]
+      ],
+      "tensor_names": [
+        "backbone_2d.deblocks.1.0.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 262144,
+      "bytes": 1048576
+    },
+    {
+      "name": "backbone_2d.deblocks.1.1",
+      "stage": "bev",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          256
+        ],
+        [
+          256
+        ],
+        [
+          256
+        ],
+        [
+          256
+        ]
+      ],
+      "tensor_names": [
+        "backbone_2d.deblocks.1.1.weight",
+        "backbone_2d.deblocks.1.1.bias",
+        "backbone_2d.deblocks.1.1.running_mean",
+        "backbone_2d.deblocks.1.1.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 1024,
+      "bytes": 4096
+    },
+    {
+      "name": "dense_head.shared_conv",
+      "stage": "head",
+      "operator": "Conv2d",
+      "tensor_shapes": [
+        [
+          128,
+          512,
+          3,
+          3
+        ],
+        [
+          128
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.shared_conv.weight",
+        "dense_head.shared_conv.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 589952,
+      "bytes": 2359808
+    },
+    {
+      "name": "dense_head.heatmap_head.0.conv",
+      "stage": "head",
+      "operator": "Conv2d",
+      "tensor_shapes": [
+        [
+          128,
+          128,
+          3,
+          3
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.heatmap_head.0.conv.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 147456,
+      "bytes": 589824
+    },
+    {
+      "name": "dense_head.heatmap_head.0.bn",
+      "stage": "head",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          128
+        ],
+        [
+          128
+        ],
+        [
+          128
+        ],
+        [
+          128
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.heatmap_head.0.bn.weight",
+        "dense_head.heatmap_head.0.bn.bias",
+        "dense_head.heatmap_head.0.bn.running_mean",
+        "dense_head.heatmap_head.0.bn.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 512,
+      "bytes": 2048
+    },
+    {
+      "name": "dense_head.heatmap_head.1",
+      "stage": "head",
+      "operator": "Conv2d",
+      "tensor_shapes": [
+        [
+          10,
+          128,
+          3,
+          3
+        ],
+        [
+          10
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.heatmap_head.1.weight",
+        "dense_head.heatmap_head.1.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 11530,
+      "bytes": 46120
+    },
+    {
+      "name": "dense_head.class_encoding",
+      "stage": "head",
+      "operator": "Conv1d",
+      "tensor_shapes": [
+        [
+          128,
+          10,
+          1
+        ],
+        [
+          128
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.class_encoding.weight",
+        "dense_head.class_encoding.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 1408,
+      "bytes": 5632
+    },
+    {
+      "name": "dense_head.decoder.self_attn",
+      "stage": "head",
+      "operator": "MultiheadAttention",
+      "tensor_shapes": [
+        [
+          384,
+          128
+        ],
+        [
+          384
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.decoder.self_attn.in_proj_weight",
+        "dense_head.decoder.self_attn.in_proj_bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 49536,
+      "bytes": 198144
+    },
+    {
+      "name": "dense_head.decoder.self_attn.out_proj",
+      "stage": "head",
+      "operator": "MultiheadAttention",
+      "tensor_shapes": [
+        [
+          128,
+          128
+        ],
+        [
+          128
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.decoder.self_attn.out_proj.weight",
+        "dense_head.decoder.self_attn.out_proj.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 16512,
+      "bytes": 66048
+    },
+    {
+      "name": "dense_head.decoder.multihead_attn",
+      "stage": "head",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          384,
+          128
+        ],
+        [
+          384
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.decoder.multihead_attn.in_proj_weight",
+        "dense_head.decoder.multihead_attn.in_proj_bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 49536,
+      "bytes": 198144
+    },
+    {
+      "name": "dense_head.decoder.multihead_attn.out_proj",
+      "stage": "head",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          128,
+          128
+        ],
+        [
+          128
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.decoder.multihead_attn.out_proj.weight",
+        "dense_head.decoder.multihead_attn.out_proj.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 16512,
+      "bytes": 66048
+    },
+    {
+      "name": "dense_head.decoder.linear1",
+      "stage": "head",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          256,
+          128
+        ],
+        [
+          256
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.decoder.linear1.weight",
+        "dense_head.decoder.linear1.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 33024,
+      "bytes": 132096
+    },
+    {
+      "name": "dense_head.decoder.linear2",
+      "stage": "head",
+      "operator": "Linear",
+      "tensor_shapes": [
+        [
+          128,
+          256
+        ],
+        [
+          128
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.decoder.linear2.weight",
+        "dense_head.decoder.linear2.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 32896,
+      "bytes": 131584
+    },
+    {
+      "name": "dense_head.decoder.norm1",
+      "stage": "head",
+      "operator": "LayerNorm",
+      "tensor_shapes": [
+        [
+          128
+        ],
+        [
+          128
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.decoder.norm1.weight",
+        "dense_head.decoder.norm1.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 256,
+      "bytes": 1024
+    },
+    {
+      "name": "dense_head.decoder.norm2",
+      "stage": "head",
+      "operator": "LayerNorm",
+      "tensor_shapes": [
+        [
+          128
+        ],
+        [
+          128
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.decoder.norm2.weight",
+        "dense_head.decoder.norm2.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 256,
+      "bytes": 1024
+    },
+    {
+      "name": "dense_head.decoder.norm3",
+      "stage": "head",
+      "operator": "LayerNorm",
+      "tensor_shapes": [
+        [
+          128
+        ],
+        [
+          128
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.decoder.norm3.weight",
+        "dense_head.decoder.norm3.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 256,
+      "bytes": 1024
+    },
+    {
+      "name": "dense_head.decoder.self_posembed.position_embedding_head.0",
+      "stage": "head",
+      "operator": "Conv1d",
+      "tensor_shapes": [
+        [
+          128,
+          2,
+          1
+        ],
+        [
+          128
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.decoder.self_posembed.position_embedding_head.0.weight",
+        "dense_head.decoder.self_posembed.position_embedding_head.0.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 384,
+      "bytes": 1536
+    },
+    {
+      "name": "dense_head.decoder.self_posembed.position_embedding_head.1",
+      "stage": "head",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          128
+        ],
+        [
+          128
+        ],
+        [
+          128
+        ],
+        [
+          128
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.decoder.self_posembed.position_embedding_head.1.weight",
+        "dense_head.decoder.self_posembed.position_embedding_head.1.bias",
+        "dense_head.decoder.self_posembed.position_embedding_head.1.running_mean",
+        "dense_head.decoder.self_posembed.position_embedding_head.1.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 512,
+      "bytes": 2048
+    },
+    {
+      "name": "dense_head.decoder.self_posembed.position_embedding_head.3",
+      "stage": "head",
+      "operator": "Conv1d",
+      "tensor_shapes": [
+        [
+          128,
+          128,
+          1
+        ],
+        [
+          128
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.decoder.self_posembed.position_embedding_head.3.weight",
+        "dense_head.decoder.self_posembed.position_embedding_head.3.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 16512,
+      "bytes": 66048
+    },
+    {
+      "name": "dense_head.decoder.cross_posembed.position_embedding_head.0",
+      "stage": "head",
+      "operator": "Conv1d",
+      "tensor_shapes": [
+        [
+          128,
+          2,
+          1
+        ],
+        [
+          128
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.decoder.cross_posembed.position_embedding_head.0.weight",
+        "dense_head.decoder.cross_posembed.position_embedding_head.0.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 384,
+      "bytes": 1536
+    },
+    {
+      "name": "dense_head.decoder.cross_posembed.position_embedding_head.1",
+      "stage": "head",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          128
+        ],
+        [
+          128
+        ],
+        [
+          128
+        ],
+        [
+          128
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.decoder.cross_posembed.position_embedding_head.1.weight",
+        "dense_head.decoder.cross_posembed.position_embedding_head.1.bias",
+        "dense_head.decoder.cross_posembed.position_embedding_head.1.running_mean",
+        "dense_head.decoder.cross_posembed.position_embedding_head.1.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 512,
+      "bytes": 2048
+    },
+    {
+      "name": "dense_head.decoder.cross_posembed.position_embedding_head.3",
+      "stage": "head",
+      "operator": "Conv1d",
+      "tensor_shapes": [
+        [
+          128,
+          128,
+          1
+        ],
+        [
+          128
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.decoder.cross_posembed.position_embedding_head.3.weight",
+        "dense_head.decoder.cross_posembed.position_embedding_head.3.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 16512,
+      "bytes": 66048
+    },
+    {
+      "name": "dense_head.prediction_head.center.0.0",
+      "stage": "head",
+      "operator": "Conv1d",
+      "tensor_shapes": [
+        [
+          64,
+          128,
+          1
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.prediction_head.center.0.0.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 8192,
+      "bytes": 32768
+    },
+    {
+      "name": "dense_head.prediction_head.center.0.1",
+      "stage": "head",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          64
+        ],
+        [
+          64
+        ],
+        [
+          64
+        ],
+        [
+          64
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.prediction_head.center.0.1.weight",
+        "dense_head.prediction_head.center.0.1.bias",
+        "dense_head.prediction_head.center.0.1.running_mean",
+        "dense_head.prediction_head.center.0.1.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 256,
+      "bytes": 1024
+    },
+    {
+      "name": "dense_head.prediction_head.center.1",
+      "stage": "head",
+      "operator": "Conv1d",
+      "tensor_shapes": [
+        [
+          2,
+          64,
+          1
+        ],
+        [
+          2
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.prediction_head.center.1.weight",
+        "dense_head.prediction_head.center.1.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 130,
+      "bytes": 520
+    },
+    {
+      "name": "dense_head.prediction_head.height.0.0",
+      "stage": "head",
+      "operator": "Conv1d",
+      "tensor_shapes": [
+        [
+          64,
+          128,
+          1
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.prediction_head.height.0.0.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 8192,
+      "bytes": 32768
+    },
+    {
+      "name": "dense_head.prediction_head.height.0.1",
+      "stage": "head",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          64
+        ],
+        [
+          64
+        ],
+        [
+          64
+        ],
+        [
+          64
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.prediction_head.height.0.1.weight",
+        "dense_head.prediction_head.height.0.1.bias",
+        "dense_head.prediction_head.height.0.1.running_mean",
+        "dense_head.prediction_head.height.0.1.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 256,
+      "bytes": 1024
+    },
+    {
+      "name": "dense_head.prediction_head.height.1",
+      "stage": "head",
+      "operator": "Conv1d",
+      "tensor_shapes": [
+        [
+          1,
+          64,
+          1
+        ],
+        [
+          1
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.prediction_head.height.1.weight",
+        "dense_head.prediction_head.height.1.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 65,
+      "bytes": 260
+    },
+    {
+      "name": "dense_head.prediction_head.dim.0.0",
+      "stage": "head",
+      "operator": "Conv1d",
+      "tensor_shapes": [
+        [
+          64,
+          128,
+          1
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.prediction_head.dim.0.0.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 8192,
+      "bytes": 32768
+    },
+    {
+      "name": "dense_head.prediction_head.dim.0.1",
+      "stage": "head",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          64
+        ],
+        [
+          64
+        ],
+        [
+          64
+        ],
+        [
+          64
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.prediction_head.dim.0.1.weight",
+        "dense_head.prediction_head.dim.0.1.bias",
+        "dense_head.prediction_head.dim.0.1.running_mean",
+        "dense_head.prediction_head.dim.0.1.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 256,
+      "bytes": 1024
+    },
+    {
+      "name": "dense_head.prediction_head.dim.1",
+      "stage": "head",
+      "operator": "Conv1d",
+      "tensor_shapes": [
+        [
+          3,
+          64,
+          1
+        ],
+        [
+          3
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.prediction_head.dim.1.weight",
+        "dense_head.prediction_head.dim.1.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 195,
+      "bytes": 780
+    },
+    {
+      "name": "dense_head.prediction_head.rot.0.0",
+      "stage": "head",
+      "operator": "Conv1d",
+      "tensor_shapes": [
+        [
+          64,
+          128,
+          1
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.prediction_head.rot.0.0.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 8192,
+      "bytes": 32768
+    },
+    {
+      "name": "dense_head.prediction_head.rot.0.1",
+      "stage": "head",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          64
+        ],
+        [
+          64
+        ],
+        [
+          64
+        ],
+        [
+          64
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.prediction_head.rot.0.1.weight",
+        "dense_head.prediction_head.rot.0.1.bias",
+        "dense_head.prediction_head.rot.0.1.running_mean",
+        "dense_head.prediction_head.rot.0.1.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 256,
+      "bytes": 1024
+    },
+    {
+      "name": "dense_head.prediction_head.rot.1",
+      "stage": "head",
+      "operator": "Conv1d",
+      "tensor_shapes": [
+        [
+          2,
+          64,
+          1
+        ],
+        [
+          2
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.prediction_head.rot.1.weight",
+        "dense_head.prediction_head.rot.1.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 130,
+      "bytes": 520
+    },
+    {
+      "name": "dense_head.prediction_head.vel.0.0",
+      "stage": "head",
+      "operator": "Conv1d",
+      "tensor_shapes": [
+        [
+          64,
+          128,
+          1
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.prediction_head.vel.0.0.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 8192,
+      "bytes": 32768
+    },
+    {
+      "name": "dense_head.prediction_head.vel.0.1",
+      "stage": "head",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          64
+        ],
+        [
+          64
+        ],
+        [
+          64
+        ],
+        [
+          64
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.prediction_head.vel.0.1.weight",
+        "dense_head.prediction_head.vel.0.1.bias",
+        "dense_head.prediction_head.vel.0.1.running_mean",
+        "dense_head.prediction_head.vel.0.1.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 256,
+      "bytes": 1024
+    },
+    {
+      "name": "dense_head.prediction_head.vel.1",
+      "stage": "head",
+      "operator": "Conv1d",
+      "tensor_shapes": [
+        [
+          2,
+          64,
+          1
+        ],
+        [
+          2
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.prediction_head.vel.1.weight",
+        "dense_head.prediction_head.vel.1.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 130,
+      "bytes": 520
+    },
+    {
+      "name": "dense_head.prediction_head.heatmap.0.0",
+      "stage": "head",
+      "operator": "Conv1d",
+      "tensor_shapes": [
+        [
+          64,
+          128,
+          1
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.prediction_head.heatmap.0.0.weight"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 8192,
+      "bytes": 32768
+    },
+    {
+      "name": "dense_head.prediction_head.heatmap.0.1",
+      "stage": "head",
+      "operator": "BatchNorm",
+      "tensor_shapes": [
+        [
+          64
+        ],
+        [
+          64
+        ],
+        [
+          64
+        ],
+        [
+          64
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.prediction_head.heatmap.0.1.weight",
+        "dense_head.prediction_head.heatmap.0.1.bias",
+        "dense_head.prediction_head.heatmap.0.1.running_mean",
+        "dense_head.prediction_head.heatmap.0.1.running_var"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 256,
+      "bytes": 1024
+    },
+    {
+      "name": "dense_head.prediction_head.heatmap.1",
+      "stage": "head",
+      "operator": "Conv1d",
+      "tensor_shapes": [
+        [
+          10,
+          64,
+          1
+        ],
+        [
+          10
+        ]
+      ],
+      "tensor_names": [
+        "dense_head.prediction_head.heatmap.1.weight",
+        "dense_head.prediction_head.heatmap.1.bias"
+      ],
+      "dtypes": [
+        "float32"
+      ],
+      "elements": 650,
+      "bytes": 2600
+    }
+  ]
+}
