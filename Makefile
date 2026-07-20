@@ -73,8 +73,8 @@ RUNTIME_SOURCES = src/runtime.c src/model.c src/kernels_ref.c src/voxel.c \
 	src/bev_stage.c src/transfusion.c src/transfusion_decoder.c
 CLI_SOURCES = src/frame.c src/tui.c
 
-.PHONY: all doctor check-cuda demo demo-data demo-gif quickstart model test \
-	test-full portable-test cuda-test clean
+.PHONY: all doctor check-cuda demo demo-data demo-gif quickstart model \
+	model-summary test test-full portable-test cuda-test clean
 
 all: build/bevfusion $(if $(filter 1,$(CUDA_ENABLED)),build/bevfusion_cuda,)
 
@@ -109,6 +109,9 @@ demo-gif: build/bevfusion_cuda model $(DEMO_MANIFEST)
 quickstart: demo
 
 model: $(MODEL)
+
+model-summary: $(CHECKPOINT)
+	$(PYTHON) tools/visualize_checkpoint.py "$(CHECKPOINT)"
 
 $(CHECKPOINT):
 	@printf 'missing checkpoint: %s\nPlace the checkpoint under %s/checkpoints or override CHECKPOINT=/path/to/file.\n' "$@" "$(NUSCENES_ROOT)"

@@ -47,6 +47,25 @@ The file is hosted externally and is not covered by this repository's MIT
 License. The exporter validates its tensor names and shapes before producing a
 BFW runtime model.
 
+### Inspect the frozen network before running it
+
+After installing the export dependency, generate a checkpoint-derived,
+`torchsummary`-style operator and tensor-shape inventory:
+
+```sh
+python -m pip install -r requirements/export.txt
+make model-summary CHECKPOINT=/path/to/cbgs_bevfusion.pth
+```
+
+This writes [`docs/model-summary.md`](docs/model-summary.md) and the machine-
+readable `docs/model-graph.json` used by the interactive
+[technical article](https://hova88.github.io/bevfusion.c/#model-graph). The
+script safely loads tensor-only checkpoint state with `weights_only=True`.
+Checkpoint facts, the pinned upstream
+[OpenPCDet configuration](https://github.com/open-mmlab/OpenPCDet/blob/master/tools/cfgs/nuscenes_models/bevfusion.yaml),
+and BEVFusion.c activation contracts are labeled separately because a PyTorch
+state dictionary does not itself contain a forward graph.
+
 ## 1. First build on a new machine
 
 Requirements: a C11 compiler, `make`, and a POSIX host. CMake 3.18+ is optional.

@@ -21,6 +21,18 @@ The checkpoint is an external asset with its own terms; it is not redistributed
 under the source repository's MIT License and is never downloaded implicitly.
 The BFW exporter later verifies the expected tensor names and shapes.
 
+To inspect the checkpoint before export, generate the human and web views:
+
+```sh
+make model-summary CHECKPOINT="$NUSCENES_ROOT/checkpoints/cbgs_bevfusion.pth"
+```
+
+The generated [`model-summary.md`](model-summary.md) lists every grouped
+operator and stored tensor shape in a `torchsummary`-style table. The
+interactive website reads the matching `model-graph.json`. Architecture names
+are tied to the official OpenPCDet BEVFusion config; activation shapes are
+identified separately as BEVFusion.c runtime contracts.
+
 ## 2. Create an isolated Python environment
 
 ```sh

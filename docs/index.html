@@ -11,7 +11,7 @@
 <body>
   <header class="topbar">
     <a class="brand" href="#top"><img src="bevfusion-mark.svg" alt="" width="30"><span>BEVFusion.c</span></a>
-    <nav aria-label="Article"><a href="#pipeline">Pipeline</a><a href="#operators">Operators</a><a href="#optimization">Optimization</a><a href="#build">Build</a><a class="source" href="https://github.com/hova88/bevfusion.c">Source ↗</a></nav>
+    <nav aria-label="Article"><a href="#pipeline">Pipeline</a><a href="#model-graph">Model graph</a><a href="#operators">Operators</a><a href="#optimization">Optimization</a><a href="#build">Build</a><a class="source" href="https://github.com/hova88/bevfusion.c">Source ↗</a></nav>
   </header>
   <main id="top"><article>
     <header class="hero">
@@ -42,8 +42,28 @@
       <div class="pipe"><span>RGB<br><b>6×3×256×704</b></span><i>→</i><span>Swin<br><b>3 scales</b></span><i>→</i><span>Depth + LSS<br><b>80×180×180</b></span><em>+</em><span>Points<br><b>P×5</b></span><i>→</i><span>Sparse CNN<br><b>256×180×180</b></span><i>→</i><span>Fusion<br><b>336×180×180</b></span><i>→</i><span>Boxes<br><b>≤200×11</b></span></div>
     </section>
 
+    <section id="model-graph">
+      <p class="section-number">03 — Frozen model explorer</p><h2>Open the checkpoint, without hiding the evidence.</h2>
+      <p>The cards below combine three explicitly separated facts: stored weight shapes read from <code>cbgs_bevfusion.pth</code>, architecture semantics from the owner-supplied and pinned <a href="https://github.com/open-mmlab/OpenPCDet/blob/233f849829b6ac19afb8af8837a0246890908755/tools/cfgs/nuscenes_models/bevfusion.yaml">OpenPCDet config</a>, and activation shapes enforced by the C runtime. The checkpoint itself contains no training commit identity. Select a flow step, filter a branch, or search all 246 checkpoint entries.</p>
+      <div class="model-stats" aria-label="Checkpoint totals"><span><b id="model-modules">246</b>grouped entries</span><span><b id="model-tensors">525</b>stored tensors</span><span><b id="model-elements">40.84 M</b>elements</span><span><b id="model-bytes">155.91 MiB</b>payload</span></div>
+      <div class="model-explorer">
+        <div class="explorer-head"><div><span class="explorer-kicker">Activation contract</span><strong id="flow-name">Sensor input</strong></div><code id="flow-shape">[6, 3, 256, 704] + [P, 5]</code></div>
+        <div class="model-flow" id="model-flow" aria-label="Runtime tensor flow"></div>
+        <p class="flow-note" id="flow-note">BFI v1 runtime input</p>
+        <div class="model-controls">
+          <div class="stage-filters" id="stage-filters" aria-label="Filter checkpoint operators"></div>
+          <label class="model-search"><span>Search</span><input id="model-search" type="search" placeholder="qkv, sparse conv, heatmap…" autocomplete="off"></label>
+        </div>
+        <div class="stage-overview" id="stage-overview" aria-live="polite"></div>
+        <div class="operator-list" id="operator-list"></div>
+        <p class="model-empty" id="model-empty" hidden>No checkpoint entry matches this filter.</p>
+      </div>
+      <p class="caption">The state dictionary is not presented as a traced graph: weight-free operations remain in the activation rail, while checkpoint entries remain searchable below. Read the complete <a href="model-summary.md">torchsummary-style Markdown inventory</a> or regenerate both views with <code>python3 tools/visualize_checkpoint.py /path/to/cbgs_bevfusion.pth</code>.</p>
+      <noscript><p>This explorer needs JavaScript for filtering. The complete <a href="model-summary.md">Markdown model summary</a> contains the same information.</p></noscript>
+    </section>
+
     <section id="operators">
-      <p class="section-number">03 — Operator decomposition</p><h2>The camera branch: learn depth, then lift.</h2><p>Swin-T extracts multi-scale image features. An FPN returns them to a common width. The depth head predicts a categorical depth distribution and a context vector for every image location. Calibration turns each image-depth pair into a BEV cell.</p>
+      <p class="section-number">04 — Operator decomposition</p><h2>The camera branch: learn depth, then lift.</h2><p>Swin-T extracts multi-scale image features. An FPN returns them to a common width. The depth head predicts a categorical depth distribution and a context vector for every image location. Calibration turns each image-depth pair into a BEV cell.</p>
       <svg class="wide figure" viewBox="0 0 800 330" role="img" aria-labelledby="lift-title"><title id="lift-title">Lift-splat maps image features through depth bins into bird's-eye-view cells</title><defs><marker id="small-arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0l7 3.5L0 7z" fill="#58687a"/></marker></defs><g transform="translate(30 45)"><rect class="plane" width="210" height="140"/><path class="image-lines" d="M0 35h210M0 70h210M0 105h210M42 0v140M84 0v140M126 0v140M168 0v140"/><circle class="hot" cx="126" cy="70" r="7"/></g><g class="rays"><path d="M240 115L510 42M240 115L510 112M240 115L510 182"/><circle cx="325" cy="92" r="5"/><circle cx="403" cy="70" r="5"/><circle class="hot" cx="473" cy="52" r="7"/></g><path class="flow" d="M500 112h55" marker-end="url(#small-arrow)"/><g transform="translate(575 30)"><rect class="plane" width="190" height="190"/><path class="image-lines" d="M0 38h190M0 76h190M0 114h190M0 152h190M38 0v190M76 0v190M114 0v190M152 0v190"/><rect class="cell" x="114" y="38" width="38" height="38"/></g><text x="30" y="218">image feature</text><text x="298" y="222">118 depth bins</text><text x="586" y="248">metric BEV cell</text><text class="annotation" x="30" y="278">context[c,h,w] × probability[d,h,w] → contribution[cell,c]</text></svg>
       <p class="caption">“Lift” creates depth-weighted features along camera rays; “splat” sums contributions landing in the same ground cell.</p>
       <h2>The LiDAR branch: preserve sparsity.</h2><p>Points are deterministically grouped into voxels. MeanVFE averages at most ten points per voxel. Twenty-one sparse convolutions reuse coordinate maps, then height compression creates a dense <code>[1,256,180,180]</code> tensor only at the branch boundary.</p>
@@ -51,10 +71,10 @@
       <h2>TransFusion: ask the map for objects.</h2><p>Image and LiDAR BEVs concatenate to 336 channels. A dense backbone produces a shared feature and class heatmap. The top 200 locations become queries; attention, an FFN, and six heads decode metric center, dimensions, rotation, velocity, class, and score.</p>
     </section>
 
-    <section id="memory"><p class="section-number">04 — Residency</p><h2>Move tensors at the boundary, not between operators.</h2><p>A fast kernel cannot rescue a graph that repeatedly returns to the host. CUDA uploads BFI inputs once, owns reusable weights and scratch, and copies back only canonical detections.</p><div class="residency"><div><strong>Host</strong><span>BFW mmap</span><span>BFI mmap</span><span>JSON / TUI</span></div><div class="transfer"><span>18,426,080 B H2D →</span><span>← 8,804 B D2H</span></div><div class="device"><strong>GPU · 1118.71 MiB owned</strong><span>Swin + camera 472.95 MiB</span><span>LiDAR 323.57 MiB</span><span>fusion + decoder + boundaries</span></div></div><p class="caption">Recorded on one RTX 4060 Ti run. “Owned” is explicit allocation accounting, not a portable promise.</p></section>
+    <section id="memory"><p class="section-number">05 — Residency</p><h2>Move tensors at the boundary, not between operators.</h2><p>A fast kernel cannot rescue a graph that repeatedly returns to the host. CUDA uploads BFI inputs once, owns reusable weights and scratch, and copies back only canonical detections.</p><div class="residency"><div><strong>Host</strong><span>BFW mmap</span><span>BFI mmap</span><span>JSON / TUI</span></div><div class="transfer"><span>18,426,080 B H2D →</span><span>← 8,804 B D2H</span></div><div class="device"><strong>GPU · 1118.71 MiB owned</strong><span>Swin + camera 472.95 MiB</span><span>LiDAR 323.57 MiB</span><span>fusion + decoder + boundaries</span></div></div><p class="caption">Recorded on one RTX 4060 Ti run. “Owned” is explicit allocation accounting, not a portable promise.</p></section>
 
     <section id="optimization">
-      <p class="section-number">05 — Optimization worklog</p><h2>Every fast idea passes through an oracle.</h2><p>The scalar route stays as reference. A candidate is promoted only when the relevant complete slice remains within tolerance. Several intuitively good ideas lost.</p>
+      <p class="section-number">06 — Optimization worklog</p><h2>Every fast idea passes through an oracle.</h2><p>The scalar route stays as reference. A candidate is promoted only when the relevant complete slice remains within tolerance. Several intuitively good ideas lost.</p>
       <div class="worklog">
         <article><div class="worklog-head"><span>Portable CPU graph</span><strong>209.32 → 11.71 s</strong></div><div class="bars"><i style="--w:100%">scalar oracle</i><i class="win" style="--w:5.59%">OpenMP + SIMD-friendly loops</i></div><p>Keep the scalar dense kernels switchable, then parallelize output ownership, reuse sparse coordinate lookups, remove padding branches, and vectorize contiguous reductions. Generic Netlib BLAS regressed and is not auto-selected.</p></article>
         <article><div class="worklog-head"><span>CPU proposal selection</span><strong>2,833 → 8.2 ms</strong></div><div class="bars"><i style="--w:100%">repeated scan + prior search</i><i class="win" style="--w:1%">bounded 200-entry heap</i></div><p>One stable top-k scan replaces an O(N·K²) search while preserving score order and the original flat-index tie rule. The complete TransFusion checkpoint oracle still passes.</p></article>
@@ -74,7 +94,7 @@
       <aside class="definition"><strong>Next</strong><span>Distill or replace Swin-T; reduce camera resolution or 118 depth bins; coarsen the BEV grid; prune the dense BEV backbone; calibrate INT8/FP16. Every model change needs a new checkpoint, export contract, full oracle pass, and nuScenes evaluation.</span></aside>
     </section>
 
-    <section id="build"><p class="section-number">06 — Reproduce it</p><h2>Start small. Add dependencies only when needed.</h2>
+    <section id="build"><p class="section-number">07 — Reproduce it</p><h2>Start small. Add dependencies only when needed.</h2>
       <ol class="steps">
         <li><span>1</span><div><h3>Prove the portable core</h3><pre><code>make doctor
 make ENABLE_CUDA=0 test</code></pre><p>No dataset, checkpoint, Python package, or GPU is required.</p></div></li>
@@ -92,7 +112,7 @@ make cuda-test</code></pre><p>Change the architecture for the target GPU. Explic
       </ol>
       <div class="platforms"><span><b>WSL2 / Linux</b>OpenMP/OpenBLAS + NVIDIA CUDA</span><span><b>macOS</b>Accelerate CPU</span><span><b>Jetson</b>OpenMP CPU + JetPack CUDA</span></div><p>Continue with the <a href="BUILDING.md">platform build guide</a>, <a href="DATA.md">data guide</a>, and <a href="PORTABILITY.md">portability review</a>.</p>
     </section>
-    <section><p class="section-number">07 — What the numbers mean</p><h2>Equivalence is not dataset accuracy.</h2><p>Kernel fixtures prove an operator. Matching raw outputs proves the frozen graph. Official mAP/NDS requires results tied to nuScenes sample tokens and evaluated with the official protocol. BFI v1 omits that global metadata, so this project does not turn a convincing demo into an unsupported accuracy claim.</p><blockquote>Optimize the actual bottleneck, preserve a reference path, and attach every claim to numerical evidence.</blockquote></section>
+    <section><p class="section-number">08 — What the numbers mean</p><h2>Equivalence is not dataset accuracy.</h2><p>Kernel fixtures prove an operator. Matching raw outputs proves the frozen graph. Official mAP/NDS requires results tied to nuScenes sample tokens and evaluated with the official protocol. BFI v1 omits that global metadata, so this project does not turn a convincing demo into an unsupported accuracy claim.</p><blockquote>Optimize the actual bottleneck, preserve a reference path, and attach every claim to numerical evidence.</blockquote></section>
   </article></main>
   <footer><div><img src="bevfusion-mark.svg" alt="" width="28"><strong>BEVFusion.c</strong></div><p>A dependency-free static article. Visual storytelling inspired by Simon Boehm’s <a href="https://siboehm.com/articles/22/CUDA-MMM">CUDA matmul worklog</a>; diagrams and text are original.</p><p><a href="https://github.com/hova88/bevfusion.c#readme">README</a> · <a href="https://github.com/hova88/bevfusion.c/tree/main/wiki">Engineering wiki</a> · <a href="https://github.com/hova88/bevfusion.c/blob/main/benchmark.csv">Raw benchmarks</a></p></footer>
 </body>
