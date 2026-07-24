@@ -31,3 +31,5 @@ date,hardware,backend,candidate,validation,cold_ms,warm_ms,ram_mib,vram_mib,h2d_
 2026-07-18,RTX 4060 Ti 16GiB,CUDA 12.4,LSS calibration-plan reuse,unchanged 210-float calibration key,,145.852,,1118.71,18426080,8804,promote stage optimization (avoids ~0.36ms plan preparation; full-graph median of 7 is noise-bound)
 2026-07-18,RTX 4060 Ti 16GiB,CUDA 12.4,LSS 64-bit cell+ordinal ordering,same module oracle,,,,82.71,0,0,reject (plan rebuild ~1.17ms and +23.08MiB versus 32-bit stable sort)
 2026-07-18,CPU scalar,C11 strict,complete BFI-to-detections reference,oracle reference,209320.586,209320.586,342.02,,0,0,reference only
+2026-07-25,GPU unavailable,CUDA 12.4 custom,cuda-custom-tile16-v1,compile/link only; runtime oracle pending,,,,,,,retain unpromoted (GPU/NVML access blocked)
+2026-07-25,RTX 4060 Ti 16GiB,CUDA 12.4 custom,cuda-custom-tile16-gridx-v2,operator/stage/full-runtime strict gates pass; repeat bit-exact,596.413,572.971,,1102.63,18426080,8804,accept correctness fix; reject performance promotion

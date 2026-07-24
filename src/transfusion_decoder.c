@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include "bf_transfusion_decoder.h"
 
 #include "bf_kernels.h"

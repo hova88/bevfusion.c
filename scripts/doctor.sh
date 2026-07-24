@@ -31,12 +31,12 @@ fi
 if command -v "$NVCC" >/dev/null 2>&1; then
     cuda_version=$($NVCC --version 2>/dev/null | sed -n 's/.*release \([^,]*\).*/\1/p' | tail -n 1)
     cuda_arch=$("$(dirname "$0")/detect_cuda_arch.sh" 2>/dev/null || true)
-    printf '  CUDA:         %s (version %s, arch %s)\n' "$(found "$NVCC")" \
-        "${cuda_version:-unknown}" "${cuda_arch:-set CUDA_ARCH manually}"
+    printf '  CUDA custom:  %s (version %s, local arch %s; requires CUDA >= 12.0)\n' "$(found "$NVCC")" \
+        "${cuda_version:-unknown}" "${cuda_arch:-portable build uses sm_75 + compute_75 PTX}"
     if printf '#include <cudnn.h>\n' | "$CC" -E -x c - >/dev/null 2>&1; then
-        printf '  cuDNN headers: yes\n'
+        printf '  CUDA vendor:  available (cuDNN headers found; opt in explicitly)\n'
     else
-        printf '  cuDNN headers: no (CPU still builds; CUDA needs development headers)\n'
+        printf '  CUDA vendor:  unavailable (custom CUDA does not require cuDNN)\n'
     fi
 else
     printf '  CUDA:         optional, not found (CPU build is available)\n'

@@ -1,7 +1,10 @@
 #include "bf_cuda_transfusion.h"
+#include "bf_cuda_ops.h"
 
 #include <cuda_runtime.h>
+#ifdef BF_CUDA_VENDOR
 #include <cublas_v2.h>
+#endif
 #include <cub/cub.cuh>
 
 #include <cmath>
@@ -20,7 +23,9 @@ struct position_weights { device_linear first, second; };
 struct head_weights { device_linear hidden, output; int channels; };
 
 struct bf_cuda_transfusion {
+#ifdef BF_CUDA_VENDOR
     cublasHandle_t cublas;
+#endif
     size_t height, width, keys, proposals, candidates;
     size_t resident_bytes, arena_bytes, cub_bytes;
     unsigned char *arena;
@@ -52,7 +57,9 @@ static int fail(char *error,size_t cap,const char *format,...) {
     if(error&&cap){va_list args;va_start(args,format);std::vsnprintf(error,cap,format,args);va_end(args);}return 0;
 }
 static int cuda_ok(cudaError_t s,char *e,size_t c,const char *w){return s==cudaSuccess?1:fail(e,c,"%s: %s",w,cudaGetErrorString(s));}
+#ifdef BF_CUDA_VENDOR
 static int blas_ok(cublasStatus_t s,char *e,size_t c,const char *w){return s==CUBLAS_STATUS_SUCCESS?1:fail(e,c,"%s: cuBLAS status %d",w,(int)s);}
+#endif
 
 static const float *find_f32(const bf_model *m,const char *name,uint32_t rank,
                              const uint32_t *dims,char *error,size_t cap){
@@ -178,7 +185,9 @@ __global__ static void position_first_kernel(float *out,const float *weight,cons
 __global__ static void add_shared_kernel(float *tokens,const float *shared,int keys){size_t i=(size_t)blockIdx.x*blockDim.x+threadIdx.x;
     if(i<(size_t)keys*CHANNELS){int k=i/CHANNELS,c=i%CHANNELS;tokens[i]+=shared[(size_t)c*keys+k];}}
 __global__ static void add_kernel(const float *a,const float *b,float *out,size_t n,bool relu){size_t i=(size_t)blockIdx.x*blockDim.x+threadIdx.x;if(i<n){float v=a[i]+b[i];out[i]=relu?fmaxf(v,0.0f):v;}}
+#ifdef BF_CUDA_VENDOR
 __global__ static void bias_activation_kernel(float *x,const float *bias,int rows,int cols,bool relu){size_t i=(size_t)blockIdx.x*blockDim.x+threadIdx.x;if(i<(size_t)rows*cols){float v=x[i]+bias[i%cols];x[i]=relu?fmaxf(v,0.0f):v;}}
+#endif
 __global__ static void relu_kernel(float *x,size_t n){size_t i=(size_t)blockIdx.x*blockDim.x+threadIdx.x;if(i<n)x[i]=fmaxf(x[i],0.0f);}
 
 __global__ static void layer_norm_kernel(const float *residual,const float *update,float *out,
@@ -230,12 +239,19 @@ __global__ static void transpose_head_kernel(const float *rows,float *channels,i
 
 static int linear(bf_cuda_transfusion *d,const device_linear &l,const float *input,float *output,
                   int rows,cudaStream_t stream,char *error,size_t cap){
+#ifdef BF_CUDA_VENDOR
     if(!blas_ok(cublasSetStream(d->cublas,stream),error,cap,"set decoder stream"))return 0;
     const float one=1.0f,zero=0.0f;
     if(!blas_ok(cublasSgemm(d->cublas,CUBLAS_OP_T,CUBLAS_OP_N,l.out_features,rows,l.in_features,
         &one,l.weight,l.in_features,input,l.in_features,&zero,output,l.out_features),error,cap,"decoder GEMM"))return 0;
     if(l.bias)bias_activation_kernel<<<((size_t)rows*l.out_features+255)/256,256,0,stream>>>(output,l.bias,rows,l.out_features,false);
     return cuda_ok(cudaGetLastError(),error,cap,"decoder linear kernel");
+#else
+    (void)d;
+    return bf_cuda_gemm_f32(input,l.weight,l.bias,output,rows,l.in_features,
+                            l.out_features,0,reinterpret_cast<void *>(stream),
+                            error,cap);
+#endif
 }
 
 typedef struct {float *suppressed,*sort_a,*sort_b;uint32_t *index_a,*index_b;float *key_value,*key_tmp,*key_proj,*value_proj;
@@ -260,9 +276,11 @@ extern "C" int bf_cuda_transfusion_create(const bf_model *m,size_t h,size_t w,si
         return fail(error,cap,"invalid CUDA TransFusion contract");
     bf_cuda_transfusion *d=(bf_cuda_transfusion *)std::calloc(1,sizeof(*d));if(!d)return fail(error,cap,"decoder context allocation failed");
     d->height=h;d->width=w;d->keys=h*w;d->proposals=proposals;d->candidates=10*d->keys;
+#ifdef BF_CUDA_VENDOR
     if(!blas_ok(cublasCreate(&d->cublas),error,cap,"create decoder cuBLAS")||
        !blas_ok(cublasSetMathMode(d->cublas,CUBLAS_PEDANTIC_MATH),error,cap,"set pedantic GEMM")||
        !blas_ok(cublasSetAtomicsMode(d->cublas,CUBLAS_ATOMICS_NOT_ALLOWED),error,cap,"disable GEMM atomics"))goto failure;
+#endif
     {uint32_t wd[3]={CHANNELS,10,1},bd[1]={CHANNELS};const float *sw=find_f32(m,"dense_head.class_encoding.weight",3,wd,error,cap);
      const float *sb=find_f32(m,"dense_head.class_encoding.bias",1,bd,error,cap);if(!sw||!sb||
        !upload_array(&d->class_encoding.weight,sw,CHANNELS*10,d,error,cap)||!upload_array(&d->class_encoding.bias,sb,CHANNELS,d,error,cap))goto failure;
@@ -302,7 +320,11 @@ extern "C" void bf_cuda_transfusion_destroy(bf_cuda_transfusion *d){if(!d)return
     free_linear(&d->cross_q);free_linear(&d->cross_k);free_linear(&d->cross_v);free_linear(&d->cross_out);free_linear(&d->ffn1);free_linear(&d->ffn2);
     free_linear(&d->self_position.first);free_linear(&d->self_position.second);free_linear(&d->cross_position.first);free_linear(&d->cross_position.second);
     for(int i=0;i<3;++i){cudaFree(d->norm_scale[i]);cudaFree(d->norm_bias[i]);}for(int i=0;i<6;++i){free_linear(&d->heads[i].hidden);free_linear(&d->heads[i].output);}
-    cudaFree(d->arena);cudaFree(d->cub_workspace);cudaFree(d->device_detections);if(d->cublas)cublasDestroy(d->cublas);std::free(d);}
+    cudaFree(d->arena);cudaFree(d->cub_workspace);cudaFree(d->device_detections);
+#ifdef BF_CUDA_VENDOR
+    if(d->cublas)cublasDestroy(d->cublas);
+#endif
+    std::free(d);}
 
 extern "C" int bf_cuda_transfusion_forward(bf_cuda_transfusion *d,const float *shared,const float *heatmap,
     bf_transfusion_raw_outputs *out,void *stream_value,char *error,size_t cap){

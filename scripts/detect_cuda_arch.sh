@@ -4,7 +4,9 @@
 set -eu
 
 if command -v nvidia-smi >/dev/null 2>&1; then
-    capability=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null |
+    raw_capability=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null) ||
+        raw_capability=
+    capability=$(printf '%s\n' "$raw_capability" |
         sed -n '1{s/[.]//g;s/^[[:space:]]*//;s/[[:space:]]*$//;p;}')
     if [ -n "$capability" ]; then
         printf 'sm_%s\n' "$capability"

@@ -9,8 +9,9 @@ the user selects it explicitly.
 | Make | CMake | Result |
 |---|---|---|
 | `make ENABLE_CUDA=0` | `-DBF_ENABLE_CUDA=OFF` | CPU only |
-| `make` | `-DBF_ENABLE_CUDA=AUTO` | CPU plus CUDA when complete |
-| `make ENABLE_CUDA=1` | `-DBF_ENABLE_CUDA=ON` | fail if CUDA/cuDNN is incomplete |
+| `make` | `-DBF_ENABLE_CUDA=AUTO` | CPU plus custom CUDA when Toolkit 12.x is present |
+| `make ENABLE_CUDA=1` | `-DBF_ENABLE_CUDA=ON` | require custom CUDA; no cuDNN/cuBLAS |
+| `make ENABLE_CUDA=1 ENABLE_CUDA_VENDOR=1` | `-DBF_ENABLE_CUDA_VENDOR=ON` | also build the explicit vendor comparison |
 
 CPU acceleration is independently optional:
 
@@ -29,7 +30,7 @@ a rebuild: `BF_CPU_SCALAR=1` selects reference dense kernels and
 set the CPU thread budget.
 
 Run `make doctor` first. It reports tools, Python modules, CUDA architecture,
-cuDNN headers, and all configured asset paths without changing the machine.
+custom/vendor availability, and configured asset paths without changing the machine.
 The full demo also requires the exact
 [`cbgs_bevfusion.pth` checkpoint](https://drive.google.com/file/d/1X50b-8immqlqD8VPAUkSKI0Ls-4k37g9/view?usp=share_link);
 download it early and save it under `$NUSCENES_ROOT/checkpoints/` as described
@@ -55,9 +56,9 @@ GCC normally supplies its OpenMP runtime with the compiler; Clang commonly
 uses `libomp-dev`. Neither package is required for the scalar fallback.
 
 WSL2 CUDA uses the Windows NVIDIA driver exposed to Linux. Do not install a
-second Linux display driver inside WSL. Install a compatible CUDA toolkit and
-cuDNN development package, confirm `nvcc`, `nvidia-smi`, and `cudnn.h` in
-`make doctor`, then run `make ENABLE_CUDA=1`.
+second Linux display driver inside WSL. Install CUDA Toolkit 12.x, confirm
+`nvcc` and `nvidia-smi` in `make doctor`, then run `make ENABLE_CUDA=1`.
+cuDNN is needed only for the optional vendor comparison target.
 
 ## macOS
 
@@ -77,7 +78,7 @@ time until it is measured on the target Mac.
 
 ## NVIDIA Jetson
 
-Use the CUDA and cuDNN versions bundled for the installed JetPack release;
+Use the CUDA version bundled for the installed JetPack release;
 mixing desktop repository packages with JetPack is a common ABI failure. Begin
 with a native build on the device:
 
@@ -86,14 +87,14 @@ make doctor
 make ENABLE_CUDA=1 CUDA_ARCH=sm_87 -j2  # Jetson Orin
 ```
 
-Common architectures are `sm_87` for Orin, `sm_72` for Xavier, and `sm_53`
-for Nano. Verify the exact module. Older Jetson toolkits and this source may
-also differ in supported C++/cuDNN APIs; explicit CUDA mode is designed to
-surface that at configure time.
+The supported CUDA contract is `sm_75` and newer with CUDA 12.x; Orin
+(`sm_87`) qualifies when its JetPack provides CUDA 12. Xavier and Nano do not
+meet this contract. Explicit CUDA mode surfaces the toolkit mismatch at
+configure time.
 
-The measured production runtime owns about 1.1 GiB of device memory, before
-driver/runtime reserve. That fits some Jetson configurations but not all
-concurrent workloads. Reduce competing GPU processes and measure the target;
+The measured vendor baseline owns about 1.1 GiB of device memory, before
+driver/runtime reserve. The custom provider must be measured separately. That
+budget fits some Jetson configurations but not all concurrent workloads;
 there is not yet a configurable low-memory CUDA plan.
 
 ## CUDA discovery overrides
@@ -103,8 +104,11 @@ Make accepts normal compiler variables:
 ```sh
 make ENABLE_CUDA=1 \
   NVCC=/opt/cuda/bin/nvcc \
+  CUDA_ARCH=sm_90
+
+# Optional contemporaneous cuDNN/cuBLAS comparison:
+make ENABLE_CUDA=1 ENABLE_CUDA_VENDOR=1 \
   CPPFLAGS='-Iinclude -I/opt/cudnn/include' \
-  CUDAFLAGS='-O3 -lineinfo -arch=sm_90 -I/opt/cudnn/include' \
   LDFLAGS='-L/opt/cudnn/lib64'
 ```
 
@@ -114,7 +118,6 @@ For CMake:
 cmake -S . -B build/custom \
   -DBF_ENABLE_CUDA=ON \
   -DCUDAToolkit_ROOT=/opt/cuda \
-  -DCUDNN_ROOT=/opt/cudnn \
   -DBF_CUDA_ARCHS=90
 cmake --build build/custom -j
 ```
@@ -122,11 +125,16 @@ cmake --build build/custom -j
 ## Troubleshooting
 
 `nvcc: command not found` means only the CUDA compiler is missing; use the CPU
-build immediately or set `NVCC`. `cudnn.h: No such file` means the runtime
-package alone is insufficient—development headers are required. An
+build immediately or set `NVCC`. `cudnn.h: No such file` affects only the
+explicit vendor target; install development headers or leave it disabled. An
 `unsupported gpu architecture` error means `CUDA_ARCH` does not match that
 toolkit. A runtime `no kernel image` error means the binary omitted the target
 GPU architecture.
+
+The default Make build uses `CUDA_ARCH=portable`, emitting `sm_75` SASS plus
+`compute_75` PTX for driver JIT on newer devices. CMake uses architecture `75`,
+which emits the corresponding SASS/PTX pair. Set the actual architecture for
+local profiling.
 
 For reproducible release artifacts, leave `NATIVE=0`. Enable `NATIVE=1` only
 for a binary that stays on the machine where it was built.
