@@ -45,20 +45,33 @@ override CFLAGS += -fopenmp
 LDLIBS += -fopenmp
 endif
 
-# ENABLE_CUDA=auto builds CUDA only when nvcc and cuDNN headers are visible.
+# ENABLE_CUDA=auto builds CUDA when a CUDA 12.x nvcc is visible.
 # Use ENABLE_CUDA=0 for a deterministic CPU-only build, or ENABLE_CUDA=1 to
 # require CUDA and receive an actionable diagnostic when it is incomplete.
 ENABLE_CUDA ?= auto
-CUDA_ARCH ?= $(shell scripts/detect_cuda_arch.sh 2>/dev/null)
+ENABLE_CUDA_VENDOR ?= 0
+CUDA_ARCH ?= portable
+ifeq ($(CUDA_ARCH),portable)
+CUDA_ARCH_FLAG = -gencode arch=compute_75,code=sm_75 -gencode arch=compute_75,code=compute_75
+else
 CUDA_ARCH_FLAG = $(if $(strip $(CUDA_ARCH)),-arch=$(CUDA_ARCH),)
+endif
 CUDAFLAGS ?= -O3 -lineinfo $(CUDA_ARCH_FLAG)
+CUDA_HOST_LDFLAGS = $(if $(filter -fopenmp,$(LDLIBS)),-Xcompiler -fopenmp,)
+CUDA_LDLIBS = $(filter-out -fopenmp,$(LDLIBS))
 HAVE_NVCC := $(shell command -v "$(NVCC)" >/dev/null 2>&1 && echo 1 || echo 0)
+HAVE_CUDA12 := $(shell "$(NVCC)" --version 2>/dev/null | awk '/release / { split($$0,a,"release "); if (a[2]+0 >= 12) print 1; exit }')
+ifeq ($(ENABLE_CUDA_VENDOR),1)
 HAVE_CUDNN := $(shell printf '\#include <cudnn.h>\n' | "$(CC)" $(CPPFLAGS) -E -x c - >/dev/null 2>&1 && echo 1 || echo 0)
+else
+HAVE_CUDNN := 0
+endif
 ifeq ($(ENABLE_CUDA),auto)
-CUDA_ENABLED := $(shell [ "$(HAVE_NVCC)" = 1 ] && [ "$(HAVE_CUDNN)" = 1 ] && echo 1 || echo 0)
+CUDA_ENABLED := $(shell [ "$(HAVE_NVCC)" = 1 ] && [ "$(HAVE_CUDA12)" = 1 ] && echo 1 || echo 0)
 else
 CUDA_ENABLED := $(ENABLE_CUDA)
 endif
+CUDA_VENDOR_ENABLED := $(ENABLE_CUDA_VENDOR)
 
 NUSCENES_ROOT ?= $(if $(wildcard /data/nuscenes),/data/nuscenes,$(HOME)/datasets/nuscenes)
 DEMO_DIR ?= $(NUSCENES_ROOT)/bevfusion-demo
@@ -73,10 +86,11 @@ RUNTIME_SOURCES = src/runtime.c src/model.c src/kernels_ref.c src/voxel.c \
 	src/bev_stage.c src/transfusion.c src/transfusion_decoder.c
 CLI_SOURCES = src/frame.c src/tui.c
 
-.PHONY: all doctor check-cuda demo demo-data demo-gif quickstart model \
+.PHONY: all doctor check-cuda check-cuda-vendor cuda-link-audit demo demo-data demo-gif quickstart model \
 	model-summary test test-full portable-test cuda-test clean
 
-all: build/bevfusion $(if $(filter 1,$(CUDA_ENABLED)),build/bevfusion_cuda,)
+all: build/bevfusion $(if $(filter 1,$(CUDA_ENABLED)),build/bevfusion_cuda,) \
+	$(if $(filter 1,$(CUDA_VENDOR_ENABLED)),build/bevfusion_cuda_vendor,)
 
 doctor:
 	@CC="$(CC)" NVCC="$(NVCC)" PYTHON="$(PYTHON)" \
@@ -89,8 +103,13 @@ check-cuda:
 	@if [ "$(HAVE_NVCC)" != 1 ]; then \
 		printf 'CUDA requested, but nvcc was not found. Set NVCC=/path/to/nvcc or use ENABLE_CUDA=0.\n' >&2; exit 2; \
 	fi
+	@if [ "$(HAVE_CUDA12)" != 1 ]; then \
+		printf 'CUDA 12.0 or newer is required by the custom CUDA backend.\n' >&2; exit 2; \
+	fi
+
+check-cuda-vendor: check-cuda
 	@if [ "$(HAVE_CUDNN)" != 1 ]; then \
-		printf 'CUDA requested, but cudnn.h is not visible to %s. Install cuDNN development files or add their include directory to CPPFLAGS.\n' "$(CC)" >&2; exit 2; \
+		printf 'Vendor CUDA requested, but cudnn.h is not visible to %s. Install cuDNN development files or add its include directory to CPPFLAGS.\n' "$(CC)" >&2; exit 2; \
 	fi
 
 demo: build/bevfusion_cuda model $(DEMO_MANIFEST)
@@ -266,7 +285,11 @@ build/test_cuda_depth_raster: tests/test_cuda_depth_raster.cu src/cuda_depth_ras
 	mkdir -p build
 	$(NVCC) $(CPPFLAGS) $(CUDAFLAGS) tests/test_cuda_depth_raster.cu src/cuda_depth_raster.cu build/depth_raster_cuda_test.o -o $@
 
-CUDA_RUNTIME_SOURCES = src/cuda_runtime.cu src/cuda_depth_raster.cu src/cuda_voxel.cu src/cuda_lidar.cu src/cuda_swin.cu src/cuda_camera.cu src/cuda_lss.cu src/cuda_bev_stage.cu src/cuda_transfusion.cu
+build/test_cuda_ops: tests/test_cuda_ops.cu src/cuda_ops.cu include/bf_cuda_ops.h
+	mkdir -p build
+	$(NVCC) $(CPPFLAGS) $(CUDAFLAGS) tests/test_cuda_ops.cu src/cuda_ops.cu -o $@
+
+CUDA_RUNTIME_SOURCES = src/cuda_runtime.cu src/cuda_depth_raster.cu src/cuda_voxel.cu src/cuda_lidar.cu src/cuda_ops.cu src/cuda_swin.cu src/cuda_camera.cu src/cuda_lss.cu src/cuda_bev_stage.cu src/cuda_transfusion.cu
 CUDA_C_SOURCES = src/main.c $(RUNTIME_SOURCES) $(CLI_SOURCES)
 CUDA_C_OBJECTS = $(patsubst src/%.c,build/cuda_c_%.o,$(CUDA_C_SOURCES))
 
@@ -276,39 +299,50 @@ build/cuda_c_%.o: src/%.c
 
 build/bevfusion_cuda: $(CUDA_C_OBJECTS) $(CUDA_RUNTIME_SOURCES) | check-cuda
 	mkdir -p build
-	$(NVCC) $(CPPFLAGS) $(CUDAFLAGS) $(CUDA_C_OBJECTS) $(CUDA_RUNTIME_SOURCES) $(LDFLAGS) $(LDLIBS) -lcudnn -lcublas -o $@
+	$(NVCC) $(CPPFLAGS) $(CUDAFLAGS) $(CUDA_C_OBJECTS) $(CUDA_RUNTIME_SOURCES) $(LDFLAGS) $(CUDA_HOST_LDFLAGS) $(CUDA_LDLIBS) -o $@
+
+build/bevfusion_cuda_vendor: $(CUDA_C_OBJECTS) $(CUDA_RUNTIME_SOURCES) | check-cuda-vendor
+	mkdir -p build
+	$(NVCC) $(CPPFLAGS) $(CUDAFLAGS) -DBF_CUDA_VENDOR $(CUDA_C_OBJECTS) $(CUDA_RUNTIME_SOURCES) $(LDFLAGS) $(CUDA_HOST_LDFLAGS) $(CUDA_LDLIBS) -lcudnn -lcublas -o $@
+
+cuda-link-audit: build/bevfusion_cuda
+	@if command -v readelf >/dev/null 2>&1 && \
+	    readelf -d build/bevfusion_cuda | grep -Eq 'libcudnn|libcublas'; then \
+		printf 'custom CUDA link audit failed: vendor library dependency found\n' >&2; exit 2; \
+	fi
+	@printf 'custom CUDA link audit passed (no cuDNN/cuBLAS dependency)\n'
 
 build/test_cuda_runtime: tests/test_cuda_runtime.cu $(CUDA_RUNTIME_SOURCES) build/model_cuda_test.o build/frame_cuda_test.o include/bf_cuda_runtime.h
 	mkdir -p build
-	$(NVCC) $(CPPFLAGS) $(CUDAFLAGS) tests/test_cuda_runtime.cu $(CUDA_RUNTIME_SOURCES) build/model_cuda_test.o build/frame_cuda_test.o -lcudnn -lcublas -o $@
+	$(NVCC) $(CPPFLAGS) $(CUDAFLAGS) tests/test_cuda_runtime.cu $(CUDA_RUNTIME_SOURCES) build/model_cuda_test.o build/frame_cuda_test.o -o $@
 
 build/test_cuda_lss: tests/test_cuda_lss.cu src/cuda_lss.cu build/model_cuda_test.o include/bf_cuda.h include/bf_lss.h include/bf_model.h
 	mkdir -p build
 	$(NVCC) $(CPPFLAGS) $(CUDAFLAGS) tests/test_cuda_lss.cu src/cuda_lss.cu build/model_cuda_test.o -o $@
 
-build/test_cuda_bev_stage: tests/test_cuda_bev_stage.cu src/cuda_bev_stage.cu build/model_cuda_test.o include/bf_cuda_bev.h include/bf_model.h
+build/test_cuda_bev_stage: tests/test_cuda_bev_stage.cu src/cuda_bev_stage.cu src/cuda_ops.cu build/model_cuda_test.o include/bf_cuda_bev.h include/bf_cuda_ops.h include/bf_model.h
 	mkdir -p build
-	$(NVCC) $(CPPFLAGS) $(CUDAFLAGS) tests/test_cuda_bev_stage.cu src/cuda_bev_stage.cu build/model_cuda_test.o -lcudnn -o $@
+	$(NVCC) $(CPPFLAGS) $(CUDAFLAGS) tests/test_cuda_bev_stage.cu src/cuda_bev_stage.cu src/cuda_ops.cu build/model_cuda_test.o -o $@
 
-build/test_cuda_transfusion: tests/test_cuda_transfusion.cu src/cuda_transfusion.cu build/model_cuda_test.o include/bf_cuda_transfusion.h include/bf_transfusion_decoder.h include/bf_model.h
+build/test_cuda_transfusion: tests/test_cuda_transfusion.cu src/cuda_transfusion.cu src/cuda_ops.cu build/model_cuda_test.o include/bf_cuda_transfusion.h include/bf_transfusion_decoder.h include/bf_cuda_ops.h include/bf_model.h
 	mkdir -p build
-	$(NVCC) $(CPPFLAGS) $(CUDAFLAGS) tests/test_cuda_transfusion.cu src/cuda_transfusion.cu build/model_cuda_test.o -lcublas -o $@
+	$(NVCC) $(CPPFLAGS) $(CUDAFLAGS) tests/test_cuda_transfusion.cu src/cuda_transfusion.cu src/cuda_ops.cu build/model_cuda_test.o -o $@
 
-build/test_cuda_tail: tests/test_cuda_tail.cu src/cuda_bev_stage.cu src/cuda_transfusion.cu build/model_cuda_test.o include/bf_cuda_bev.h include/bf_cuda_transfusion.h
+build/test_cuda_tail: tests/test_cuda_tail.cu src/cuda_bev_stage.cu src/cuda_transfusion.cu src/cuda_ops.cu build/model_cuda_test.o include/bf_cuda_bev.h include/bf_cuda_transfusion.h include/bf_cuda_ops.h
 	mkdir -p build
-	$(NVCC) $(CPPFLAGS) $(CUDAFLAGS) tests/test_cuda_tail.cu src/cuda_bev_stage.cu src/cuda_transfusion.cu build/model_cuda_test.o -lcudnn -lcublas -o $@
+	$(NVCC) $(CPPFLAGS) $(CUDAFLAGS) tests/test_cuda_tail.cu src/cuda_bev_stage.cu src/cuda_transfusion.cu src/cuda_ops.cu build/model_cuda_test.o -o $@
 
-build/test_cuda_camera: tests/test_cuda_camera.cu src/cuda_camera.cu src/cuda_lss.cu build/model_cuda_test.o include/bf_cuda_camera.h include/bf_cuda.h
+build/test_cuda_camera: tests/test_cuda_camera.cu src/cuda_camera.cu src/cuda_ops.cu src/cuda_lss.cu build/model_cuda_test.o include/bf_cuda_camera.h include/bf_cuda_ops.h include/bf_cuda.h
 	mkdir -p build
-	$(NVCC) $(CPPFLAGS) $(CUDAFLAGS) tests/test_cuda_camera.cu src/cuda_camera.cu src/cuda_lss.cu build/model_cuda_test.o -lcudnn -o $@
+	$(NVCC) $(CPPFLAGS) $(CUDAFLAGS) tests/test_cuda_camera.cu src/cuda_camera.cu src/cuda_ops.cu src/cuda_lss.cu build/model_cuda_test.o -o $@
 
-build/test_cuda_swin: tests/test_cuda_swin.cu src/cuda_swin.cu build/model_cuda_test.o include/bf_cuda_swin.h
+build/test_cuda_swin: tests/test_cuda_swin.cu src/cuda_swin.cu src/cuda_ops.cu build/model_cuda_test.o include/bf_cuda_swin.h include/bf_cuda_ops.h
 	mkdir -p build
-	$(NVCC) $(CPPFLAGS) $(CUDAFLAGS) tests/test_cuda_swin.cu src/cuda_swin.cu build/model_cuda_test.o -lcudnn -lcublas -o $@
+	$(NVCC) $(CPPFLAGS) $(CUDAFLAGS) tests/test_cuda_swin.cu src/cuda_swin.cu src/cuda_ops.cu build/model_cuda_test.o -o $@
 
-build/test_cuda_camera_full: tests/test_cuda_camera_full.cu src/cuda_swin.cu src/cuda_camera.cu src/cuda_lss.cu build/model_cuda_test.o include/bf_cuda_swin.h include/bf_cuda_camera.h include/bf_cuda.h
+build/test_cuda_camera_full: tests/test_cuda_camera_full.cu src/cuda_swin.cu src/cuda_camera.cu src/cuda_ops.cu src/cuda_lss.cu build/model_cuda_test.o include/bf_cuda_swin.h include/bf_cuda_camera.h include/bf_cuda_ops.h include/bf_cuda.h
 	mkdir -p build
-	$(NVCC) $(CPPFLAGS) $(CUDAFLAGS) tests/test_cuda_camera_full.cu src/cuda_swin.cu src/cuda_camera.cu src/cuda_lss.cu build/model_cuda_test.o -lcudnn -lcublas -o $@
+	$(NVCC) $(CPPFLAGS) $(CUDAFLAGS) tests/test_cuda_camera_full.cu src/cuda_swin.cu src/cuda_camera.cu src/cuda_ops.cu src/cuda_lss.cu build/model_cuda_test.o -o $@
 
 build/test_cuda_lidar: tests/test_cuda_lidar.cu src/cuda_lidar.cu src/cuda_voxel.cu build/model_cuda_test.o include/bf_cuda_lidar.h include/bf_cuda_voxel.h
 	mkdir -p build
@@ -320,9 +354,10 @@ build/test_cuda_voxel: tests/test_cuda_voxel.cu src/cuda_voxel.cu include/bf_cud
 
 build/test_cuda_voxel_real: tests/test_cuda_voxel_real.cu src/cuda_voxel.cu build/voxel_cuda_test.o build/kernels_cuda_test.o build/frame_cuda_test.o include/bf_cuda_voxel.h
 	mkdir -p build
-	$(NVCC) $(CPPFLAGS) $(CUDAFLAGS) tests/test_cuda_voxel_real.cu src/cuda_voxel.cu build/voxel_cuda_test.o build/kernels_cuda_test.o build/frame_cuda_test.o $(LDFLAGS) $(LDLIBS) -lm -o $@
+	$(NVCC) $(CPPFLAGS) $(CUDAFLAGS) tests/test_cuda_voxel_real.cu src/cuda_voxel.cu build/voxel_cuda_test.o build/kernels_cuda_test.o build/frame_cuda_test.o $(LDFLAGS) $(CUDA_HOST_LDFLAGS) $(CUDA_LDLIBS) -lm -o $@
 
-cuda-test: model $(DEMO_MANIFEST) build/kernel_oracle.bfw build/bev_stage_oracle.bfw build/transfusion_decoder_oracle.bfw build/cuda_tail_oracle.bfw build/image_fpn_oracle.bfw build/depth_head_oracle.bfw build/lss_downsample_oracle.bfw build/swin_backbone_oracle.bfw build/cuda_camera_full_oracle.bfw build/lidar_backbone_oracle.bfw build/test_cuda_depth_raster build/test_cuda_lss build/test_cuda_bev_stage build/test_cuda_transfusion build/test_cuda_tail build/test_cuda_camera build/test_cuda_swin build/test_cuda_camera_full build/test_cuda_voxel build/test_cuda_voxel_real build/test_cuda_lidar build/test_cuda_runtime build/bevfusion_cuda
+cuda-test: model $(DEMO_MANIFEST) build/kernel_oracle.bfw build/bev_stage_oracle.bfw build/transfusion_decoder_oracle.bfw build/cuda_tail_oracle.bfw build/image_fpn_oracle.bfw build/depth_head_oracle.bfw build/lss_downsample_oracle.bfw build/swin_backbone_oracle.bfw build/cuda_camera_full_oracle.bfw build/lidar_backbone_oracle.bfw build/test_cuda_ops build/test_cuda_depth_raster build/test_cuda_lss build/test_cuda_bev_stage build/test_cuda_transfusion build/test_cuda_tail build/test_cuda_camera build/test_cuda_swin build/test_cuda_camera_full build/test_cuda_voxel build/test_cuda_voxel_real build/test_cuda_lidar build/test_cuda_runtime cuda-link-audit
+	./build/test_cuda_ops
 	./build/test_cuda_depth_raster
 	./build/test_cuda_lss build/kernel_oracle.bfw
 	./build/test_cuda_bev_stage $(MODEL) build/bev_stage_oracle.bfw

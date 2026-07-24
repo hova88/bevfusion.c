@@ -1,7 +1,10 @@
 #include "bf_cuda_bev.h"
+#include "bf_cuda_ops.h"
 
 #include <cuda_runtime.h>
+#ifdef BF_CUDA_VENDOR
 #include <cudnn.h>
+#endif
 
 #include <cmath>
 #include <cstdarg>
@@ -13,20 +16,25 @@ struct gpu_conv {
     float *weight, *bias;
     size_t weight_bytes, bias_bytes, workspace_bytes;
     int ci, co, ih, iw, oh, ow, kernel, stride, padding, transpose, relu;
+#ifdef BF_CUDA_VENDOR
     cudnnTensorDescriptor_t input_desc, output_desc, bias_desc;
     cudnnFilterDescriptor_t filter_desc;
     cudnnConvolutionDescriptor_t conv_desc;
     cudnnActivationDescriptor_t activation_desc;
     cudnnConvolutionFwdAlgo_t forward_algo;
     cudnnConvolutionBwdDataAlgo_t backward_algo;
+#endif
 };
 
 struct bf_cuda_bev_stage {
+#ifdef BF_CUDA_VENDOR
     cudnnHandle_t handle;
+#endif
     gpu_conv layers[18];
     size_t layer_count, height, width, resident_bytes, workspace_bytes;
     float *scratch_a, *scratch_b;
     void *workspace;
+    void *stream;
 };
 
 static int fail(char *error, size_t cap, const char *format, ...) {
@@ -42,10 +50,12 @@ static int cuda_ok(cudaError_t status, char *error, size_t cap, const char *wher
                                              cudaGetErrorString(status));
 }
 
+#ifdef BF_CUDA_VENDOR
 static int cudnn_ok(cudnnStatus_t status, char *error, size_t cap, const char *where) {
     return status == CUDNN_STATUS_SUCCESS ? 1 : fail(error, cap, "%s: %s", where,
                                                       cudnnGetErrorString(status));
 }
+#endif
 
 static const float *tensor_f32(const bf_model *model, const char *name,
                                uint32_t rank, const uint32_t *dims,
@@ -130,6 +140,7 @@ static int bind_folded(bf_cuda_bev_stage *stage, gpu_conv *layer,
     layer->weight_bytes = weight_count * sizeof(float);
     layer->bias_bytes = (size_t)co * sizeof(float);
     std::free(weight); std::free(bias);
+#ifdef BF_CUDA_VENDOR
     cudnnStatus_t status = cudnnCreateTensorDescriptor(&layer->input_desc);
     if (status == CUDNN_STATUS_SUCCESS) status = cudnnCreateTensorDescriptor(&layer->output_desc);
     if (status == CUDNN_STATUS_SUCCESS) status = cudnnCreateTensorDescriptor(&layer->bias_desc);
@@ -190,17 +201,20 @@ static int bind_folded(bf_cuda_bev_stage *stage, gpu_conv *layer,
     }
     if (layer->workspace_bytes > stage->workspace_bytes)
         stage->workspace_bytes = layer->workspace_bytes;
+#endif
     return 1;
 }
 
 static void destroy_layer(gpu_conv *layer) {
     cudaFree(layer->weight); cudaFree(layer->bias);
+#ifdef BF_CUDA_VENDOR
     if (layer->input_desc) cudnnDestroyTensorDescriptor(layer->input_desc);
     if (layer->output_desc) cudnnDestroyTensorDescriptor(layer->output_desc);
     if (layer->bias_desc) cudnnDestroyTensorDescriptor(layer->bias_desc);
     if (layer->filter_desc) cudnnDestroyFilterDescriptor(layer->filter_desc);
     if (layer->conv_desc) cudnnDestroyConvolutionDescriptor(layer->conv_desc);
     if (layer->activation_desc) cudnnDestroyActivationDescriptor(layer->activation_desc);
+#endif
 }
 
 extern "C" int bf_cuda_bev_stage_create(const bf_model *model, size_t height,
@@ -215,7 +229,9 @@ extern "C" int bf_cuda_bev_stage_create(const bf_model *model, size_t height,
     const int bn_index[6] = {2,5,8,11,14,17};
     char weight[160], bn[160];
     s->height = height; s->width = width;
+#ifdef BF_CUDA_VENDOR
     if (!cudnn_ok(cudnnCreate(&s->handle), error, cap, "create cuDNN handle")) goto failure;
+#endif
 #define ADD(w,b,bn,ci,co,k,ih,iw,st,p,tr,r) do { \
     if (!bind_folded(s, &s->layers[s->layer_count++], model, w, b, bn, ci, co, k, \
                      ih, iw, st, p, tr, r, error, cap)) goto failure; \
@@ -254,12 +270,15 @@ extern "C" void bf_cuda_bev_stage_destroy(bf_cuda_bev_stage *s) {
     if (!s) return;
     for (size_t i = 0; i < s->layer_count; ++i) destroy_layer(&s->layers[i]);
     cudaFree(s->scratch_a); cudaFree(s->scratch_b); cudaFree(s->workspace);
+#ifdef BF_CUDA_VENDOR
     if (s->handle) cudnnDestroy(s->handle);
+#endif
     std::free(s);
 }
 
 static int execute(bf_cuda_bev_stage *s, gpu_conv *l, const float *input,
                    float *output, char *error, size_t cap) {
+#ifdef BF_CUDA_VENDOR
     const float one = 1.0f, zero = 0.0f;
     cudnnStatus_t status;
     if (!l->transpose) {
@@ -280,6 +299,15 @@ static int execute(bf_cuda_bev_stage *s, gpu_conv *l, const float *input,
                 l->output_desc, output, &zero, l->output_desc, output);
     }
     return cudnn_ok(status, error, cap, "execute CUDA BEV convolution");
+#else
+    bf_cuda_conv2d_desc desc = {
+        1, l->ci, l->co, l->ih, l->iw, l->kernel, l->kernel,
+        l->stride, l->stride, l->padding, l->padding, l->oh, l->ow,
+        l->transpose, l->relu
+    };
+    return bf_cuda_conv2d_f32(&desc, input, l->weight, l->bias, output,
+                              s->stream, error, cap);
+#endif
 }
 
 extern "C" int bf_cuda_bev_stage_forward(bf_cuda_bev_stage *s,
@@ -287,8 +315,12 @@ extern "C" int bf_cuda_bev_stage_forward(bf_cuda_bev_stage *s,
     void *stream_value, char *error, size_t cap) {
     if (!s || !input || !spatial || !shared || !heatmap)
         return fail(error, cap, "invalid CUDA BEV forward buffers");
+#ifdef BF_CUDA_VENDOR
     cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_value);
     if (!cudnn_ok(cudnnSetStream(s->handle, stream), error, cap, "set cuDNN stream")) return 0;
+#else
+    s->stream = stream_value;
+#endif
     size_t hw = s->height * s->width;
     size_t i = 0;
     if (!execute(s,&s->layers[i++],input,s->scratch_a,error,cap)) return 0;

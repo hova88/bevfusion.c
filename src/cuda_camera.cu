@@ -1,7 +1,10 @@
 #include "bf_cuda_camera.h"
+#include "bf_cuda_ops.h"
 
 #include <cuda_runtime.h>
+#ifdef BF_CUDA_VENDOR
 #include <cudnn.h>
+#endif
 
 #include <cmath>
 #include <cstdarg>
@@ -14,20 +17,25 @@ struct camera_conv {
     float *weight, *bias;
     int n, ci, co, ih, iw, oh, ow, kernel, stride, padding, relu;
     size_t workspace_bytes, weight_bytes, bias_bytes;
+#ifdef BF_CUDA_VENDOR
     cudnnTensorDescriptor_t input_desc, output_desc, bias_desc;
     cudnnFilterDescriptor_t filter_desc;
     cudnnConvolutionDescriptor_t conv_desc;
     cudnnActivationDescriptor_t activation_desc;
     cudnnConvolutionFwdAlgo_t algorithm;
+#endif
 };
 
 struct bf_cuda_camera_neck {
+#ifdef BF_CUDA_VENDOR
     cudnnHandle_t handle;
+#endif
     camera_conv layers[13];
     size_t layer_count, batches, h, w, h1, w1, h2, w2, bev_h, bev_w;
     float *scratch_a, *scratch_b, *scratch_c;
     size_t scratch_a_bytes, scratch_b_bytes, scratch_c_bytes;
     void *workspace;
+    void *stream;
     size_t workspace_bytes, resident_bytes;
 };
 
@@ -44,10 +52,12 @@ static int cuda_ok(cudaError_t status, char *error, size_t cap, const char *wher
                                              cudaGetErrorString(status));
 }
 
+#ifdef BF_CUDA_VENDOR
 static int cudnn_ok(cudnnStatus_t status, char *error, size_t cap, const char *where) {
     return status == CUDNN_STATUS_SUCCESS ? 1 : fail(error, cap, "%s: %s", where,
                                                       cudnnGetErrorString(status));
 }
+#endif
 
 static const float *tensor_f32(const bf_model *model, const char *name,
                                uint32_t rank, const uint32_t *dims,
@@ -121,6 +131,7 @@ static int bind_folded(bf_cuda_camera_neck *neck, camera_conv *layer,
     }
     layer->weight_bytes=weight_count*sizeof(float); layer->bias_bytes=(size_t)co*sizeof(float);
     std::free(weight); std::free(bias);
+#ifdef BF_CUDA_VENDOR
     cudnnStatus_t status = cudnnCreateTensorDescriptor(&layer->input_desc);
     if (status == CUDNN_STATUS_SUCCESS) status = cudnnCreateTensorDescriptor(&layer->output_desc);
     if (status == CUDNN_STATUS_SUCCESS) status = cudnnCreateTensorDescriptor(&layer->bias_desc);
@@ -167,22 +178,26 @@ static int bind_folded(bf_cuda_camera_neck *neck, camera_conv *layer,
         layer->input_desc,layer->filter_desc,layer->conv_desc,layer->output_desc,
         layer->algorithm,&layer->workspace_bytes),error,cap,"query camera workspace")) return 0;
     if (layer->workspace_bytes>neck->workspace_bytes) neck->workspace_bytes=layer->workspace_bytes;
+#endif
     return 1;
 }
 
 static void destroy_layer(camera_conv *layer) {
     cudaFree(layer->weight); cudaFree(layer->bias);
+#ifdef BF_CUDA_VENDOR
     if(layer->input_desc)cudnnDestroyTensorDescriptor(layer->input_desc);
     if(layer->output_desc)cudnnDestroyTensorDescriptor(layer->output_desc);
     if(layer->bias_desc)cudnnDestroyTensorDescriptor(layer->bias_desc);
     if(layer->filter_desc)cudnnDestroyFilterDescriptor(layer->filter_desc);
     if(layer->conv_desc)cudnnDestroyConvolutionDescriptor(layer->conv_desc);
     if(layer->activation_desc)cudnnDestroyActivationDescriptor(layer->activation_desc);
+#endif
 }
 
 static int execute(bf_cuda_camera_neck *neck, camera_conv *layer,
                    const float *input, float *output,
                    char *error, size_t cap) {
+#ifdef BF_CUDA_VENDOR
     const float one=1.0f, zero=0.0f;
     cudnnStatus_t status=cudnnConvolutionBiasActivationForward(neck->handle,&one,
         layer->input_desc,input,layer->filter_desc,layer->weight,layer->conv_desc,
@@ -190,6 +205,15 @@ static int execute(bf_cuda_camera_neck *neck, camera_conv *layer,
         layer->output_desc,output,layer->bias_desc,layer->bias,
         layer->activation_desc,layer->output_desc,output);
     return cudnn_ok(status,error,cap,"execute camera convolution");
+#else
+    bf_cuda_conv2d_desc desc = {
+        layer->n, layer->ci, layer->co, layer->ih, layer->iw,
+        layer->kernel, layer->kernel, layer->stride, layer->stride,
+        layer->padding, layer->padding, layer->oh, layer->ow, 0, layer->relu
+    };
+    return bf_cuda_conv2d_f32(&desc, input, layer->weight, layer->bias,
+                              output, neck->stream, error, cap);
+#endif
 }
 
 __global__ static void fpn_concat_kernel(
@@ -250,7 +274,11 @@ extern "C" void bf_cuda_camera_neck_destroy(bf_cuda_camera_neck *neck) {
     if(!neck)return;
     for(size_t i=0;i<neck->layer_count;++i)destroy_layer(&neck->layers[i]);
     cudaFree(neck->scratch_a);cudaFree(neck->scratch_b);cudaFree(neck->scratch_c);
-    cudaFree(neck->workspace);if(neck->handle)cudnnDestroy(neck->handle);std::free(neck);
+    cudaFree(neck->workspace);
+#ifdef BF_CUDA_VENDOR
+    if(neck->handle)cudnnDestroy(neck->handle);
+#endif
+    std::free(neck);
 }
 
 extern "C" int bf_cuda_camera_neck_create(const bf_model *model,size_t batches,
@@ -264,7 +292,9 @@ extern "C" int bf_cuda_camera_neck_create(const bf_model *model,size_t batches,
     if(!n)return fail(error,cap,"camera-neck host allocation failed");
     n->batches=batches;n->h=h;n->w=w;n->h1=(h+1)/2;n->w1=(w+1)/2;
     n->h2=(n->h1+1)/2;n->w2=(n->w1+1)/2;n->bev_h=bev_h;n->bev_w=bev_w;
+#ifdef BF_CUDA_VENDOR
     if(!cudnn_ok(cudnnCreate(&n->handle),error,cap,"create camera cuDNN handle"))goto failure;
+#endif
 #define ADD(W,B,BN,CI,CO,K,IH,IW,S,P,R) do { \
  if(!bind_folded(n,&n->layers[n->layer_count++],model,W,B,BN,(int)batches,CI,CO,K, \
  (int)(IH),(int)(IW),S,P,R,1e-5f,error,cap))goto failure; } while(0)
@@ -306,8 +336,13 @@ failure: bf_cuda_camera_neck_destroy(n);return 0;
 }
 
 static int set_stream(bf_cuda_camera_neck *n,void *value,char *error,size_t cap) {
+#ifdef BF_CUDA_VENDOR
     return cudnn_ok(cudnnSetStream(n->handle,reinterpret_cast<cudaStream_t>(value)),
                     error,cap,"set camera stream");
+#else
+    n->stream=value; (void)error; (void)cap;
+    return 1;
+#endif
 }
 
 static int fpn_impl(bf_cuda_camera_neck *n,const float *s0,const float *s1,

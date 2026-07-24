@@ -1,8 +1,11 @@
 #include "bf_cuda_swin.h"
+#include "bf_cuda_ops.h"
 
 #include <cuda_runtime.h>
+#ifdef BF_CUDA_VENDOR
 #include <cublas_v2.h>
 #include <cudnn.h>
+#endif
 
 #include <cmath>
 #include <cstdarg>
@@ -32,20 +35,24 @@ struct bf_cuda_swin {
     size_t token_capacity,ffn_capacity,window_capacity;
     size_t ffn_chunk_rows,window_chunk;
     void *cudnn_workspace;size_t cudnn_workspace_bytes;
+#ifdef BF_CUDA_VENDOR
     cudnnHandle_t cudnn;cublasHandle_t cublas;
     cudnnTensorDescriptor_t patch_input_desc,patch_output_desc,patch_bias_desc;
     cudnnFilterDescriptor_t patch_filter_desc;
     cudnnConvolutionDescriptor_t patch_conv_desc;
     cudnnActivationDescriptor_t patch_activation_desc;
     cudnnConvolutionFwdAlgo_t patch_algorithm;
+#endif
 };
 
 static int fail(char *error,size_t cap,const char *format,...) {
     if(error&&cap){va_list args;va_start(args,format);std::vsnprintf(error,cap,format,args);va_end(args);}return 0;
 }
 static int cuda_ok(cudaError_t s,char *e,size_t c,const char *w){return s==cudaSuccess?1:fail(e,c,"%s: %s",w,cudaGetErrorString(s));}
+#ifdef BF_CUDA_VENDOR
 static int cudnn_ok(cudnnStatus_t s,char *e,size_t c,const char *w){return s==CUDNN_STATUS_SUCCESS?1:fail(e,c,"%s: %s",w,cudnnGetErrorString(s));}
 static int blas_ok(cublasStatus_t s,char *e,size_t c,const char *w){return s==CUBLAS_STATUS_SUCCESS?1:fail(e,c,"%s: cuBLAS status %d",w,(int)s);}
+#endif
 
 static const void *tensor_data(const bf_model *model,const char *name,uint32_t dtype,
     uint32_t rank,const uint32_t *dims,char *error,size_t cap) {
@@ -80,9 +87,11 @@ static int bind_linear(bf_cuda_swin *s,const bf_model *m,const char *weight_name
     linear->input=input;linear->output=output;linear->bytes=(size_t)input*output*sizeof(float)+(bias_name?(size_t)output*sizeof(float):0);return 1;
 }
 
+#ifdef BF_CUDA_VENDOR
 __global__ static void bias_kernel(float *values,const float *bias,size_t count,int columns) {
     size_t i=(size_t)blockIdx.x*blockDim.x+threadIdx.x;if(i<count)values[i]+=bias[i%columns];
 }
+#endif
 __global__ static void layer_norm_kernel(const float *input,float *output,
     const float *scale,const float *bias,int rows,int channels) {
     int row=blockIdx.x;__shared__ float sums[256],squares[256];
@@ -223,12 +232,18 @@ __global__ static void output_transpose_kernel(const float *tokens,float *output
 
 static int linear(bf_cuda_swin *s,const swin_linear &l,const float *input,
     float *output,int rows,cudaStream_t stream,char *error,size_t cap) {
+#ifdef BF_CUDA_VENDOR
     if(!blas_ok(cublasSetStream(s->cublas,stream),error,cap,"set Swin cuBLAS stream"))return 0;
     const float one=1.0f,zero=0.0f;
     if(!blas_ok(cublasSgemm(s->cublas,CUBLAS_OP_T,CUBLAS_OP_N,l.output,rows,l.input,
         &one,l.weight,l.input,input,l.input,&zero,output,l.output),error,cap,"Swin GEMM"))return 0;
     if(l.bias)bias_kernel<<<((size_t)rows*l.output+255)/256,256,0,stream>>>(output,l.bias,(size_t)rows*l.output,l.output);
     return cuda_ok(cudaGetLastError(),error,cap,"Swin linear launch");
+#else
+    (void)s;
+    return bf_cuda_gemm_f32(input,l.weight,l.bias,output,rows,l.input,l.output,
+                            0,reinterpret_cast<void *>(stream),error,cap);
+#endif
 }
 
 extern "C" void bf_cuda_swin_destroy(bf_cuda_swin *s) {
@@ -242,10 +257,14 @@ extern "C" void bf_cuda_swin_destroy(bf_cuda_swin *s) {
     for(int i=0;i<3;++i){FREE(s->merges[i].scale);FREE(s->merges[i].bias);FREE(s->merges[i].reduction.weight);FREE(s->output_scale[i]);FREE(s->output_bias[i]);}
     FREE(s->current_buffer);FREE(s->normal_buffer);FREE(s->ffn_buffer);FREE(s->windows);FREE(s->qkv_buffer);FREE(s->cudnn_workspace);
 #undef FREE
+#ifdef BF_CUDA_VENDOR
     if(s->patch_input_desc)cudnnDestroyTensorDescriptor(s->patch_input_desc);if(s->patch_output_desc)cudnnDestroyTensorDescriptor(s->patch_output_desc);
     if(s->patch_bias_desc)cudnnDestroyTensorDescriptor(s->patch_bias_desc);if(s->patch_filter_desc)cudnnDestroyFilterDescriptor(s->patch_filter_desc);
     if(s->patch_conv_desc)cudnnDestroyConvolutionDescriptor(s->patch_conv_desc);if(s->patch_activation_desc)cudnnDestroyActivationDescriptor(s->patch_activation_desc);
     if(s->cudnn)cudnnDestroy(s->cudnn);if(s->cublas)cublasDestroy(s->cublas);std::free(s);
+#else
+    std::free(s);
+#endif
 }
 
 extern "C" int bf_cuda_swin_create(const bf_model *model,size_t batches,size_t input_h,
@@ -253,17 +272,21 @@ extern "C" int bf_cuda_swin_create(const bf_model *model,size_t batches,size_t i
     if(out)*out=nullptr;if(!model||!out||!batches||!input_h||!input_w||(input_h%4)||(input_w%4)||
        batches>INT_MAX||input_h>INT_MAX||input_w>INT_MAX)return fail(error,cap,"invalid CUDA Swin contract");
     bf_cuda_swin *s=(bf_cuda_swin*)std::calloc(1,sizeof(*s));if(!s)return fail(error,cap,"Swin host allocation failed");
+#ifdef BF_CUDA_VENDOR
     cudnnStatus_t cs=CUDNN_STATUS_SUCCESS;
+#endif
     const char *chunk_text=nullptr;
     const char *window_text=nullptr;
     s->batches=batches;s->input_h=input_h;s->input_w=input_w;
     int channels[4]={96,192,384,768},heads[4]={3,6,12,24},depths[4]={2,2,6,2};
     s->h[0]=input_h/4;s->w[0]=input_w/4;for(int i=1;i<4;++i){s->h[i]=(s->h[i-1]+1)/2;s->w[i]=(s->w[i-1]+1)/2;}
     std::memcpy(s->channels,channels,sizeof(channels));std::memcpy(s->heads,heads,sizeof(heads));std::memcpy(s->depths,depths,sizeof(depths));
+#ifdef BF_CUDA_VENDOR
     if(!cudnn_ok(cudnnCreate(&s->cudnn),error,cap,"create Swin cuDNN")||!blas_ok(cublasCreate(&s->cublas),error,cap,"create Swin cuBLAS")||
        !blas_ok(cublasSetMathMode(s->cublas,std::getenv("BF_CUDA_SWIN_TF32")?
             CUBLAS_TF32_TENSOR_OP_MATH:CUBLAS_PEDANTIC_MATH),error,cap,"set Swin math mode")||
        !blas_ok(cublasSetAtomicsMode(s->cublas,CUBLAS_ATOMICS_NOT_ALLOWED),error,cap,"disable Swin atomics"))goto failure;
+#endif
     {uint32_t wd[4]={96,3,4,4},d[1]={96};
      if(!bind_float(s,model,"image_backbone.patch_embed.projection.weight",4,wd,&s->patch_weight,error,cap)||
         !bind_float(s,model,"image_backbone.patch_embed.projection.bias",1,d,&s->patch_bias,error,cap)||
@@ -306,6 +329,7 @@ extern "C" int bf_cuda_swin_create(const bf_model *model,size_t batches,size_t i
     ALLOC(ffn_buffer,s->ffn_capacity,"allocate Swin FFN");ALLOC(windows,s->window_capacity,"allocate Swin windows");
     ALLOC(qkv_buffer,3*s->window_capacity,"allocate Swin QKV");
 #undef ALLOC
+#ifdef BF_CUDA_VENDOR
     cs=cudnnCreateTensorDescriptor(&s->patch_input_desc);if(cs==CUDNN_STATUS_SUCCESS)cs=cudnnCreateTensorDescriptor(&s->patch_output_desc);
     if(cs==CUDNN_STATUS_SUCCESS)cs=cudnnCreateTensorDescriptor(&s->patch_bias_desc);if(cs==CUDNN_STATUS_SUCCESS)cs=cudnnCreateFilterDescriptor(&s->patch_filter_desc);
     if(cs==CUDNN_STATUS_SUCCESS)cs=cudnnCreateConvolutionDescriptor(&s->patch_conv_desc);if(cs==CUDNN_STATUS_SUCCESS)cs=cudnnCreateActivationDescriptor(&s->patch_activation_desc);
@@ -322,6 +346,7 @@ extern "C" int bf_cuda_swin_create(const bf_model *model,size_t batches,size_t i
      if(selected<0){fail(error,cap,"no bounded deterministic patch algorithm");goto failure;}s->patch_algorithm=perf[selected].algo;
      if(!cudnn_ok(cudnnGetConvolutionForwardWorkspaceSize(s->cudnn,s->patch_input_desc,s->patch_filter_desc,s->patch_conv_desc,s->patch_output_desc,s->patch_algorithm,&s->cudnn_workspace_bytes),error,cap,"query patch workspace"))goto failure;
      if(s->cudnn_workspace_bytes&&!cuda_ok(cudaMalloc(&s->cudnn_workspace,s->cudnn_workspace_bytes),error,cap,"allocate patch workspace"))goto failure;s->resident_bytes+=s->cudnn_workspace_bytes;}
+#endif
     *out=s;return 1;
 failure:bf_cuda_swin_destroy(s);return 0;
 }
@@ -333,11 +358,20 @@ extern "C" int bf_cuda_swin_forward(bf_cuda_swin *s,const float *images,float *o
     bool profile=std::getenv("BF_CUDA_SWIN_PROFILE")!=nullptr;cudaEvent_t events[6]={};
     cudaEvent_t detail[60]={};int detail_count=0;
     if(profile){for(int i=0;i<6;++i)cudaEventCreate(&events[i]);for(int i=0;i<60;++i)cudaEventCreate(&detail[i]);cudaEventRecord(events[0],stream);}
+#ifdef BF_CUDA_VENDOR
     if(!cudnn_ok(cudnnSetStream(s->cudnn,stream),error,cap,"set Swin cuDNN stream"))return 0;
     const float one=1.0f,zero=0.0f;cudnnStatus_t status=cudnnConvolutionBiasActivationForward(s->cudnn,&one,s->patch_input_desc,images,
         s->patch_filter_desc,s->patch_weight,s->patch_conv_desc,s->patch_algorithm,s->cudnn_workspace,s->cudnn_workspace_bytes,&zero,
         s->patch_output_desc,s->normal_buffer,s->patch_bias_desc,s->patch_bias,s->patch_activation_desc,s->patch_output_desc,s->normal_buffer);
     if(!cudnn_ok(status,error,cap,"execute Swin patch embedding"))return 0;
+#else
+    bf_cuda_conv2d_desc patch_desc = {
+        (int)s->batches, 3, 96, (int)s->input_h, (int)s->input_w,
+        4, 4, 4, 4, 0, 0, s->h[0], s->w[0], 0, 0
+    };
+    if(!bf_cuda_conv2d_f32(&patch_desc,images,s->patch_weight,s->patch_bias,
+        s->normal_buffer,stream_value,error,cap))return 0;
+#endif
     int rows=(int)(s->batches*(size_t)s->h[0]*s->w[0]);patch_transpose_norm_kernel<<<rows,128,0,stream>>>(s->normal_buffer,s->current_buffer,s->patch_scale,s->patch_norm_bias,(int)s->batches,s->h[0],s->w[0]);
     if(profile)cudaEventRecord(events[1],stream);
     float *current=s->current_buffer,*normal=s->normal_buffer;float *outputs[3]={out1,out2,out3};

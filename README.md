@@ -20,9 +20,10 @@ The runtime has two deliberately different backends:
 - **Portable CPU path:** C11 + POSIX APIs, with optional OpenMP and
   Accelerate/OpenBLAS dispatch. It builds on WSL, Linux, and macOS; a
   switchable scalar route remains the numerical oracle.
-- **CUDA production path:** NVIDIA CUDA, cuBLAS, and cuDNN. It keeps weights and
-  intermediate tensors resident on the GPU. This is the smooth demo path for
-  Linux, WSL2, and Jetson.
+- **Custom CUDA path:** NVIDIA CUDA Runtime plus Toolkit CUB headers. It keeps
+  weights and intermediate tensors resident on the GPU and requires no cuDNN
+  or cuBLAS. The preserved vendor path remains the measured comparison until
+  custom full-frame performance gates pass.
 
 No dataset, model, Python package, or CUDA installation is required to compile
 the CPU binary and run the dependency-free tests.
@@ -77,13 +78,15 @@ make doctor
 make test
 ```
 
-`make` builds the CPU binary and adds the CUDA binary only when both `nvcc` and
-cuDNN development headers are detected. The behavior is controllable:
+`make` builds the CPU binary and adds the custom CUDA binary when CUDA Toolkit
+12.x is detected. The default CUDA executable does not use cuDNN or cuBLAS:
 
 ```sh
 make ENABLE_CUDA=0                 # portable CPU only
-make ENABLE_CUDA=1 CUDA_ARCH=sm_87 # require CUDA; example for Jetson Orin
-make ENABLE_OPENMP=0 ENABLE_BLAS=0 # minimum-dependency scalar build
+make ENABLE_CUDA=1                 # sm_75 SASS + compute_75 PTX
+make ENABLE_CUDA=1 CUDA_ARCH=sm_89 # machine-local Ada build
+make ENABLE_CUDA=1 ENABLE_CUDA_VENDOR=1 # optional vendor comparison
+make ENABLE_CUDA=0 ENABLE_OPENMP=0 ENABLE_BLAS=0 # minimum-dependency scalar build
 make NATIVE=1                      # optional machine-local CPU instructions
 ```
 
@@ -103,12 +106,17 @@ For a required CUDA build:
 ```sh
 cmake --preset cuda-release
 cmake --build --preset cuda-release -j
+
+# Optional cuDNN/cuBLAS comparison:
+cmake --preset cuda-vendor-release
+cmake --build --preset cuda-vendor-release -j
 ```
 
-If architecture auto-detection is unavailable, add
-`-DBF_CUDA_ARCHS=87` (Orin), `72` (Xavier), or the compute capability of your
-GPU to the CMake configure command. See [the complete platform and build
-guide](docs/BUILDING.md) before installing CUDA packages.
+For a machine-local build, add `-DBF_CUDA_ARCHS=87` (Orin) or the compute
+capability of your GPU to the CMake configure command. Without an override the
+portable build emits `sm_75` SASS plus `compute_75` PTX. See
+[the complete platform and build guide](docs/BUILDING.md) before installing
+CUDA packages.
 
 ## 2. Choose the dependency layer you need
 
@@ -118,7 +126,8 @@ guide](docs/BUILDING.md) before installing CUDA packages.
 | Pack an existing NPZ | same | NumPy | NPZ frame |
 | Prepare nuScenes frames | same | NumPy, Pillow, nuScenes devkit | nuScenes mini/full |
 | Export a checkpoint | same | PyTorch | matching checkpoint |
-| CUDA inference/demo | CUDA toolkit, cuBLAS, cuDNN | data/export layers above | BFW model + BFI frames |
+| CUDA inference/demo | CUDA Toolkit 12.x runtime + CUB headers | data/export layers above | BFW model + BFI frames |
+| CUDA vendor comparison | CUDA Toolkit 12.x, cuBLAS, cuDNN | same as CUDA inference | same fixtures |
 | Full oracle validation | CPU/CUDA stack as selected | PyTorch | checkpoint + nuScenes |
 
 Create an isolated environment for offline tools:

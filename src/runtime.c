@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include "bf_runtime.h"
 
 #include "bf_bev_stage.h"

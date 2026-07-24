@@ -10,7 +10,8 @@ in build and workflow policy rather than tensor semantics.
 This review changed the following defaults:
 
 - CUDA changed from mandatory to auto-detected and explicitly controllable.
-- `sm_89` changed from a global assumption to local detection or an override.
+- the CUDA release default is now `sm_75` SASS plus `compute_75` PTX; local
+  performance builds may override it with the installed GPU architecture.
 - `-march=native` changed from a release default to an opt-in local build.
 - hot CPU dense/sparse kernels gained optional OpenMP, portable SIMD-friendly
   loops, and Accelerate/OpenBLAS dispatch behind a scalar oracle switch.
@@ -33,7 +34,7 @@ Tensor residency follows reuse:
   CUDA modules for the GPU backend.
 - BFI input is mmap-resident on CPU for the frame lifetime.
 - CPU activations use one caller-owned 64-byte-aligned arena.
-- CUDA weights, activations, rulebooks, library workspaces, and staging buffers
+- CUDA weights, activations, rulebooks, reusable scratch, and staging buffers
   are persistent per runtime.
 - one frame crosses H2D at the input boundary; only canonical detections return
   D2H at the output boundary.
@@ -45,7 +46,7 @@ Tensor residency follows reuse:
 | WSL2 x86-64 | Make + CMake CPU/CUDA | CPU/CUDA | CUDA production | tested locally for CPU CMake; CUDA revalidation required per driver |
 | Linux x86-64 | Make + CMake CPU/CUDA | CPU/CUDA | CUDA production | primary measured platform |
 | macOS arm64/x86-64 | Make + CMake CPU | CPU | Accelerate CPU path | CI matrix added; real frame still unmeasured |
-| Jetson Orin/Xavier | Make + CMake CUDA | CPU/CUDA | intended CUDA path | architecture controls added; device validation still needed |
+| Jetson Orin with CUDA 12 | Make + CMake CUDA | CPU/CUDA | intended CUDA path | architecture controls added; device validation still needed |
 
 “Source-compatible” is not the same as measured. A platform should be marked
 supported only after configure, compile, unit tests, model inspection, one real
@@ -59,12 +60,13 @@ frame, CPU/CUDA comparison where applicable, and peak memory are recorded.
    The 342 MiB arena and model compute still prevent an honest real-time CPU
    claim. In that profile, dense BEV took 6.11 s, Swin-T 3.48 s, and sparse
    LiDAR 0.80 s; those three stages account for about 89% of total latency.
-2. **Jetson memory.** The current CUDA plan owns about 1.1 GiB on the recorded
-   desktop GPU and has no low-memory preset. Jetson needs measured cuDNN
-   workspace selection and capacity budgets.
-3. **Toolkit compatibility.** CUDA/cuDNN calls compile on the recorded CUDA 12.4
-   stack. Older JetPack toolchains require an actual build matrix; architecture
-   flags alone cannot guarantee API compatibility.
+2. **Jetson memory.** The vendor baseline owned about 1.1 GiB on the recorded
+   desktop GPU and there is no low-memory preset. Orin needs measured custom
+   scratch and capacity budgets.
+3. **Toolkit compatibility.** The custom backend compiles on the recorded CUDA
+   12.4 stack and formally targets CUDA 12.x with `sm_75` or newer. Toolkit
+   minor versions and target architectures still require an actual build
+   matrix; architecture flags alone cannot guarantee runtime compatibility.
 4. **macOS measurement.** GitHub Actions now builds and tests on macOS 14, but
    Accelerate real-frame latency and peak memory still need hardware evidence.
 5. **Dataset accuracy.** BFI v1 lacks global sample identity and evaluation

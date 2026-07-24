@@ -14,12 +14,21 @@
     },
     {
       "name": "cuda-release",
-      "displayName": "CUDA release (required)",
+      "displayName": "Portable custom CUDA release (required)",
       "generator": "Unix Makefiles",
       "binaryDir": "${sourceDir}/build/cmake-cuda",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "BF_ENABLE_CUDA": "ON"
+      }
+    },
+    {
+      "name": "cuda-vendor-release",
+      "displayName": "CUDA vendor comparison (cuDNN/cuBLAS required)",
+      "inherits": "cuda-release",
+      "binaryDir": "${sourceDir}/build/cmake-cuda-vendor",
+      "cacheVariables": {
+        "BF_ENABLE_CUDA_VENDOR": "ON"
       }
     },
     {
@@ -37,6 +46,7 @@
   "buildPresets": [
     { "name": "cpu-release", "configurePreset": "cpu-release" },
     { "name": "cuda-release", "configurePreset": "cuda-release" },
+    { "name": "cuda-vendor-release", "configurePreset": "cuda-vendor-release" },
     { "name": "dev", "configurePreset": "dev" }
   ],
   "testPresets": [
